@@ -35,10 +35,11 @@ export interface InputState {
   touchDeltaY: number;
 }
 
+// Local textures — no CORS issues
 export const CHARACTER_IMAGES = {
-  forward: 'https://wad.nyc3.digitaloceanspaces.com/yourfiles/uploads/adc4b9ea187b712329c130c1eea26dc1/Gemini_Generated_Image_qi61pfqi61pfqi61.png',
-  backward: 'https://wad.nyc3.digitaloceanspaces.com/yourfiles/uploads/6fc92db67ea6a0405de4d64531f64935/Gemini_Generated_Image_l2i71nl2i71nl2i7-1-1.png',
-  shooting: 'https://wad.nyc3.digitaloceanspaces.com/yourfiles/uploads/5cd03dd6564172f029c46246779088ca/Gemini_Generated_Image_ewdkppewdkppewdk-1-1.png',
+  forward: '/character.png',
+  backward: '/character.png',
+  shooting: '/character.png',
 } as const;
 
-export const GROUND_IMAGE = 'https://wad.nyc3.digitaloceanspaces.com/yourfiles/uploads/adc4b9ea187b712329c130c1eea26dc1/Gemini_Generated_Image_qi61pfqi61pfqi61.png';
+export const GROUND_IMAGE = '/ground.png';
