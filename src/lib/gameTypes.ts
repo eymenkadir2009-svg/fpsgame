@@ -42,4 +42,4 @@ export const CHARACTER_IMAGES = {
   shooting: '/character.png',
 } as const;
 
-export const GROUND_IMAGE = '/ground.png';
+export const GROUND_IMAGE = '/ground.webp';

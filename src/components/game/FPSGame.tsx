@@ -8,6 +8,7 @@ export default function FPSGame() {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<GameEngine | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [modelLoaded, setModelLoaded] = useState(false);
   const [charState, setCharState] = useState<CharacterState>('idle');
   const [showOverlay, setShowOverlay] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
@@ -33,6 +34,7 @@ export default function FPSGame() {
 
     engine.setOnStateChange((state) => setCharState(state));
     engine.setOnReady(() => setIsLoaded(true));
+    engine.setOnModelLoadProgress(() => setModelLoaded(true));
 
     engine.start();
 
@@ -199,7 +201,10 @@ export default function FPSGame() {
             YÜKLENIYOR
           </h2>
           <p className="text-slate-500 text-sm font-mono">
-            3D Motor Başlatılıyor...
+            3D Model & Zemin Yükleniyor...
+          </p>
+          <p className="text-slate-600 text-xs font-mono mt-2">
+            Sıkıştırılmış ~5MB model — hızlı yükleme
           </p>
           <div className="mt-6 w-48 h-0.5 bg-slate-800 rounded overflow-hidden">
             <div className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded animate-pulse" style={{ width: '60%' }} />
