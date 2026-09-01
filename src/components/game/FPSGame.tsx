@@ -4,6 +4,34 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { GameEngine } from '@/lib/gameEngine';
 import { DEFAULT_CONFIG, CharacterState } from '@/lib/gameTypes';
 
+const STORAGE_KEY = 'fps_game_player';
+
+function getPlayerId(): string {
+  if (typeof window === 'undefined') return '';
+  let data = localStorage.getItem(STORAGE_KEY);
+  if (data) {
+    try { return JSON.parse(data).id; } catch { /* fall through */ }
+  }
+  const id = 'p_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ id, diamonds: 0 }));
+  return id;
+}
+
+function getLocalDiamonds(): number {
+  if (typeof window === 'undefined') return 0;
+  const data = localStorage.getItem(STORAGE_KEY);
+  if (!data) return 0;
+  try { return JSON.parse(data).diamonds || 0; } catch { return 0; }
+}
+
+function setLocalDiamonds(count: number) {
+  if (typeof window === 'undefined') return;
+  const data = localStorage.getItem(STORAGE_KEY);
+  const parsed = data ? JSON.parse(data) : { id: getPlayerId() };
+  parsed.diamonds = count;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+}
+
 export default function FPSGame() {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<GameEngine | null>(null);
@@ -12,6 +40,8 @@ export default function FPSGame() {
   const [showOverlay, setShowOverlay] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
   const [showControls, setShowControls] = useState(true);
+  const [diamonds, setDiamonds] = useState(0);
+  const [showDiamondPopup, setShowDiamondPopup] = useState(false);
 
   // Joystick state
   const joystickRef = useRef<HTMLDivElement>(null);
@@ -44,6 +74,12 @@ export default function FPSGame() {
 
     engine.setOnStateChange((state) => setCharState(state));
     engine.setOnReady(() => setIsLoaded(true));
+    engine.setOnDiamondCollected((amount) => handleDiamondCollect(amount));
+
+    // Load diamonds from localStorage
+    setDiamonds(getLocalDiamonds());
+    // Try sync from server
+    fetchDiamondsFromServer();
 
     engine.start();
 
@@ -52,15 +88,26 @@ export default function FPSGame() {
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
+      // Map space bar to 'space' keyState property
+      if (key === ' ') {
+        keyState.space = true;
+        engine.updateInput({ space: true });
+        e.preventDefault();
+        return;
+      }
       if (key in keyState) {
         (keyState as Record<string, boolean>)[key] = true;
         engine.updateInput(keyState as Partial<typeof keyState>);
       }
-      if (key === ' ') e.preventDefault();
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
+      if (key === ' ') {
+        keyState.space = false;
+        engine.updateInput({ space: false });
+        return;
+      }
       if (key in keyState) {
         (keyState as Record<string, boolean>)[key] = false;
         engine.updateInput(keyState as Partial<typeof keyState>);
@@ -233,6 +280,43 @@ export default function FPSGame() {
     updateJoystickInput();
   }, [updateJoystickInput]);
 
+  // ====== DIAMOND SYSTEM ======
+  const handleDiamondCollect = useCallback(async (amount: number) => {
+    const newTotal = diamonds + amount;
+    setDiamonds(newTotal);
+    setLocalDiamonds(newTotal);
+    setShowDiamondPopup(true);
+    setTimeout(() => setShowDiamondPopup(false), 1500);
+
+    // Send to server (fire and forget)
+    try {
+      const playerId = getPlayerId();
+      await fetch('/api/diamonds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ player_id: playerId, amount }),
+      });
+    } catch { /* server sync failed, localStorage is the fallback */ }
+  }, [diamonds]);
+
+  const fetchDiamondsFromServer = useCallback(async () => {
+    try {
+      const playerId = getPlayerId();
+      const res = await fetch(`/api/diamonds?player_id=${playerId}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.diamonds !== undefined && data.error !== 'db_not_configured') {
+          // Server has data — use the higher of server vs local
+          const local = getLocalDiamonds();
+          const server = data.diamonds as number;
+          const maxDiamonds = Math.max(local, server);
+          setDiamonds(maxDiamonds);
+          setLocalDiamonds(maxDiamonds);
+        }
+      }
+    } catch { /* server unavailable, use localStorage */ }
+  }, []);
+
   const stateLabel: Record<CharacterState, string> = {
     idle: 'HAZIR',
     walking_forward: 'YÜRÜYOR',
@@ -351,6 +435,28 @@ export default function FPSGame() {
               <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-1 rounded-full bg-cyan-400/40" />
             </div>
           </div>
+
+          {/* Diamond Counter - Top Center */}
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
+            <div className="px-5 py-2.5 rounded-xl bg-black/50 border border-cyan-500/20 backdrop-blur-md flex items-center gap-3">
+              <div className="text-2xl" style={{ filter: 'drop-shadow(0 0 6px rgba(68,221,255,0.6))' }}>
+                &#x2666;
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-[0.2em] text-cyan-400/60">Elmas</div>
+                <div className="font-mono font-bold text-lg text-cyan-300">{diamonds}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Diamond Collect Popup */}
+          {showDiamondPopup && (
+            <div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 pointer-events-none animate-bounce">
+              <div className="px-4 py-2 rounded-lg bg-cyan-500/20 border border-cyan-400/40 backdrop-blur-md">
+                <span className="text-cyan-300 font-mono font-bold text-sm">+10 ELMAS</span>
+              </div>
+            </div>
+          )}
 
           {/* State Indicator - Top Left */}
           <div className="absolute top-4 left-4 z-30 pointer-events-none">

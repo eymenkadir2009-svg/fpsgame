@@ -89,13 +89,18 @@ export class GameEngine {
   // ====== BUILDINGS ======
   private buildingModels: THREE.Group[] = [];
 
+  // ====== CRYSTAL GENERATORS ======
+  private crystalModels: THREE.Group[] = [];
+  private crystalCooldowns: Map<THREE.Group, number> = new Map();
+  private onDiamondCollected?: (amount: number) => void;
+
   // ====== SKY DOME ======
   private skyDome: THREE.Mesh | null = null;
 
   // ====== TEXTURES ======
   private ready = false;
   private loadCount = 0;
-  private totalLoads = 6; // ground + player + npc + skateboard + hovercar + building
+  private totalLoads = 7; // ground + player + npc + skateboard + hovercar + building + crystal
 
   // ====== CALLBACKS ======
   private onReady?: () => void;
@@ -114,16 +119,16 @@ export class GameEngine {
     // Scene
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x0a0e18);
-    this.scene.fog = new THREE.FogExp2(0x0a0e18, 0.003);
+    this.scene.fog = new THREE.FogExp2(0x0a0e18, 0.004);
 
     // Camera
     const asp = container.clientWidth / container.clientHeight;
     this.camera = new THREE.PerspectiveCamera(55, asp, 0.1, 500);
 
-    // Renderer
+    // Renderer — lower pixel ratio for faster initial load
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setSize(container.clientWidth, container.clientHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -131,7 +136,7 @@ export class GameEngine {
     this.renderer.autoClear = false;
     container.appendChild(this.renderer.domElement);
 
-    const pr = Math.min(window.devicePixelRatio, 2);
+    const pr = Math.min(window.devicePixelRatio, 1.5);
     this.rt = new THREE.WebGLRenderTarget(container.clientWidth * pr, container.clientHeight * pr);
     this.postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     this.postScene = new THREE.Scene();
@@ -159,6 +164,7 @@ export class GameEngine {
     this.loadSkateboardModel();
     this.loadHovercarModel();
     this.loadBuildingModel();
+    this.loadCrystalModel();
   }
 
   // ==================== LIGHTING ====================
@@ -169,7 +175,7 @@ export class GameEngine {
     this.dirLight = new THREE.DirectionalLight(0x8899cc, 3.5);
     this.dirLight.position.set(8, 18, 8);
     this.dirLight.castShadow = true;
-    this.dirLight.shadow.mapSize.set(4096, 4096);
+    this.dirLight.shadow.mapSize.set(2048, 2048);
     this.dirLight.shadow.camera.near = 0.5;
     this.dirLight.shadow.camera.far = 80;
     const s = 30;
@@ -191,7 +197,7 @@ export class GameEngine {
     const spot = new THREE.SpotLight(0xeeeeff, 5, 25, Math.PI / 4, 0.5, 1);
     spot.position.set(0, 12, 0);
     spot.castShadow = true;
-    spot.shadow.mapSize.set(2048, 2048);
+    spot.shadow.mapSize.set(1024, 1024);
     spot.shadow.bias = -0.0003;
     spot.shadow.normalBias = 0.02;
     this.scene.add(spot);
@@ -579,7 +585,7 @@ export class GameEngine {
 
   // ==================== PARTICLES ====================
   private setupParticles() {
-    const N = 3000;
+    const N = 1200;
     const pos = new Float32Array(N * 3);
     const sizes = new Float32Array(N);
     const alphas = new Float32Array(N);
@@ -630,7 +636,6 @@ export class GameEngine {
       { x: 8, y: 3, z: -10, c: 0x2266ff }, { x: -10, y: 4, z: -7, c: 0xff4422 },
       { x: 5, y: 2, z: -18, c: 0x22ff88 }, { x: -6, y: 5, z: -20, c: 0x8844ff },
       { x: 12, y: 3, z: -25, c: 0xffaa22 }, { x: -14, y: 2, z: -15, c: 0x44ddff },
-      { x: 0, y: 6, z: -30, c: 0xff2288 }, { x: -20, y: 3, z: -25, c: 0x22ffcc },
     ];
     orbData.forEach(({ x, y, z, c }) => {
       const m = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 12), new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.7 }));
@@ -643,8 +648,7 @@ export class GameEngine {
 
     const pp = [
       { x: 10, z: -8 }, { x: -10, z: -8 }, { x: 8, z: -20 }, { x: -8, z: -20 },
-      { x: 15, z: -15 }, { x: -15, z: -15 }, { x: 0, z: -30 }, { x: 12, z: -35 }, { x: -12, z: -35 },
-      { x: 20, z: -25 }, { x: -20, z: -25 },
+      { x: 15, z: -15 }, { x: -15, z: -15 },
     ];
     pp.forEach(({ x, z }) => {
       const p = new THREE.Mesh(
@@ -700,22 +704,22 @@ export class GameEngine {
         console.log('Building GLB loaded');
         const sourceModel = gltf.scene;
 
-        // Auto-scale building to ~15m tall (realistic office building)
+        // Auto-scale building to ~45m tall (large realistic office building)
         const box = new THREE.Box3().setFromObject(sourceModel);
         const size = box.getSize(new THREE.Vector3());
         const maxDim = Math.max(size.x, size.y, size.z);
-        const bScale = maxDim > 0 ? 15.0 / maxDim : 1.0;
+        const bScale = maxDim > 0 ? 45.0 / maxDim : 1.0;
 
-        // Random building positions spread around the scene
+        // Building positions spread around the scene
         const positions = [
-          { x: 20, z: -15, ry: 0.3, s: bScale },
-          { x: -18, z: -20, ry: 1.8, s: bScale * 0.8 },
-          { x: 25, z: -35, ry: 0.9, s: bScale * 1.1 },
-          { x: -25, z: -10, ry: 2.5, s: bScale * 0.7 },
-          { x: 10, z: -40, ry: 4.2, s: bScale * 0.9 },
-          { x: -12, z: -38, ry: 1.1, s: bScale },
-          { x: 35, z: -5, ry: 3.0, s: bScale * 0.6 },
-          { x: -30, z: -30, ry: 0.5, s: bScale * 1.2 },
+          { x: 25, z: -18, ry: 0.3, s: bScale },
+          { x: -22, z: -25, ry: 1.8, s: bScale * 0.85 },
+          { x: 30, z: -45, ry: 0.9, s: bScale * 1.15 },
+          { x: -30, z: -12, ry: 2.5, s: bScale * 0.75 },
+          { x: 12, z: -50, ry: 4.2, s: bScale * 0.95 },
+          { x: -15, z: -48, ry: 1.1, s: bScale * 1.05 },
+          { x: 40, z: -8, ry: 3.0, s: bScale * 0.65 },
+          { x: -38, z: -38, ry: 0.5, s: bScale * 1.2 },
         ];
 
         positions.forEach((pos) => {
@@ -854,6 +858,121 @@ export class GameEngine {
     });
   }
 
+  // ==================== LOAD CRYSTAL GENERATOR ====================
+  private loadCrystalModel() {
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+    const gltfLoader = new GLTFLoader();
+    gltfLoader.setDRACOLoader(dracoLoader);
+
+    gltfLoader.load(
+      '/crystal.glb',
+      (gltf) => {
+        console.log('Crystal GLB loaded');
+        const sourceModel = gltf.scene;
+
+        // Auto-scale to ~1.5m tall
+        const box = new THREE.Box3().setFromObject(sourceModel);
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const cScale = maxDim > 0 ? 1.5 / maxDim : 1.0;
+
+        // Crystal generator positions scattered around the map
+        const positions = [
+          { x: 5, z: -8 },
+          { x: -8, z: -12 },
+          { x: 15, z: -20 },
+          { x: -12, z: -25 },
+          { x: 3, z: -35 },
+          { x: -20, z: -8 },
+          { x: 18, z: -30 },
+          { x: -5, z: -45 },
+          { x: 28, z: -12 },
+          { x: -25, z: -35 },
+        ];
+
+        positions.forEach((pos, idx) => {
+          const wrapper = new THREE.Group();
+          const crystal = sourceModel.clone();
+          crystal.scale.setScalar(cScale);
+
+          // Center on ground
+          const b = new THREE.Box3().setFromObject(crystal);
+          crystal.position.y = -b.min.y;
+
+          crystal.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+              // Make crystals glow with emissive
+              const mats = Array.isArray(child.material) ? child.material : [child.material];
+              mats.forEach(m => {
+                if (m instanceof THREE.MeshStandardMaterial) {
+                  m.emissive = new THREE.Color(0x4488ff);
+                  m.emissiveIntensity = 1.0;
+                }
+              });
+            }
+          });
+
+          wrapper.add(crystal);
+          wrapper.position.set(pos.x, 0, pos.z);
+          wrapper.rotation.y = Math.random() * Math.PI * 2;
+          this.scene.add(wrapper);
+          this.crystalModels.push(wrapper);
+
+          // Add a point light above each crystal for glow effect
+          const glow = new THREE.PointLight(0x44aaff, 4, 8);
+          glow.position.set(0, 2, 0);
+          wrapper.add(glow);
+
+          // Add a floating diamond indicator above
+          const indicatorGeo = new THREE.OctahedronGeometry(0.15, 0);
+          const indicatorMat = new THREE.MeshBasicMaterial({ color: 0x44ddff, transparent: true, opacity: 0.8 });
+          const indicator = new THREE.Mesh(indicatorGeo, indicatorMat);
+          indicator.position.y = 2.5;
+          indicator.name = 'diamond_indicator';
+          wrapper.add(indicator);
+        });
+
+        this.checkReady();
+      },
+      undefined,
+      (err) => {
+        console.error('Crystal GLB load error:', err);
+        this.checkReady();
+      }
+    );
+  }
+
+  // ==================== CRYSTAL ANIMATION ====================
+  private updateCrystals() {
+    this.crystalModels.forEach((wrapper, i) => {
+      // Slow rotation
+      wrapper.rotation.y += 0.003;
+      // Floating diamond indicator bob
+      const indicator = wrapper.getObjectByName('diamond_indicator');
+      if (indicator) {
+        indicator.position.y = 2.5 + Math.sin(this.t * 2 + i * 1.5) * 0.3;
+        indicator.rotation.y = this.t * 1.5;
+        const indMesh = indicator as THREE.Mesh;
+        const indMat = indMesh.material as THREE.MeshBasicMaterial;
+        // Pulse opacity when ready to collect
+        const lastCollect = this.crystalCooldowns.get(wrapper) || 0;
+        const elapsed = Date.now() - lastCollect;
+        if (elapsed >= 120000) {
+          // Ready - bright pulse
+          indMat.opacity = 0.6 + Math.sin(this.t * 4) * 0.3;
+          indMat.color.set(0x44ffdd);
+        } else {
+          // On cooldown - dim
+          indMat.opacity = 0.2;
+          indMat.color.set(0x444444);
+        }
+      }
+    });
+  }
+
   // ==================== SKY DOME ====================
   private loadSkyTexture() {
     const loader = new THREE.TextureLoader();
@@ -916,7 +1035,70 @@ export class GameEngine {
   // ==================== PUBLIC API ====================
   setOnReady(cb: () => void) { this.onReady = cb; }
   setOnStateChange(cb: (s: CharacterState) => void) { this.onState = cb; }
+  setOnDiamondCollected(cb: (amount: number) => void) { this.onDiamondCollected = cb; }
   updateInput(p: Partial<InputState>) { Object.assign(this.input, p); }
+
+  // ==================== CLICK / RAYCAST FOR CRYSTALS ====================
+  private raycaster = new THREE.Raycaster();
+  private clickHandler = (e: MouseEvent) => {
+    if (!this.input.isPointerLocked) return;
+    const mouse = new THREE.Vector2(
+      (e.clientX / window.innerWidth) * 2 - 1,
+      -(e.clientY / window.innerHeight) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(mouse, this.camera);
+    const allMeshes: THREE.Object3D[] = [];
+    this.crystalModels.forEach(g => g.traverse(c => { if (c instanceof THREE.Mesh) allMeshes.push(c); }));
+    const intersects = this.raycaster.intersectObjects(allMeshes, false);
+    if (intersects.length > 0) {
+      // Find which crystal group this belongs to
+      let hitObj: THREE.Object3D | null = intersects[0].object;
+      while (hitObj && !this.crystalModels.includes(hitObj as THREE.Group)) {
+        hitObj = hitObj.parent;
+      }
+      if (hitObj && this.crystalModels.includes(hitObj as THREE.Group)) {
+        this.tryCollectCrystal(hitObj as THREE.Group);
+      }
+    }
+  };
+
+  private tryCollectCrystal(crystal: THREE.Group) {
+    // Check distance
+    const playerPos = this.charWorldPos.clone();
+    playerPos.y = 0;
+    const crystalPos = crystal.position.clone();
+    crystalPos.y = 0;
+    const dist = playerPos.distanceTo(crystalPos);
+    if (dist > 5) return; // Must be within 5m
+
+    // Check cooldown (120 seconds = 2 minutes)
+    const now = Date.now();
+    const lastCollect = this.crystalCooldowns.get(crystal) || 0;
+    if (now - lastCollect < 120000) return;
+
+    // Collect!
+    this.crystalCooldowns.set(crystal, now);
+    this.onDiamondCollected?.(10);
+
+    // Visual feedback - flash the crystal
+    crystal.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        const mats = Array.isArray(child.material) ? child.material : [child.material];
+        mats.forEach(m => {
+          if (m instanceof THREE.MeshStandardMaterial) {
+            const origEmissive = m.emissive.clone();
+            m.emissive.set(0xffffff);
+            m.emissiveIntensity = 3;
+            setTimeout(() => {
+              m.emissive.copy(origEmissive);
+              m.emissiveIntensity = 1.0;
+            }, 400);
+          }
+        });
+      }
+    });
+  }
+
 
   // ==================== CAMERA ====================
   private updateCamera() {
@@ -1094,6 +1276,7 @@ export class GameEngine {
     this.updateShadowLight();
     this.updateHovercars(dt);
     this.updateSkyDome();
+    this.updateCrystals();
 
     // Update animation mixer
     if (this.charMixer) this.charMixer.update(dt);
@@ -1115,8 +1298,17 @@ export class GameEngine {
     this.renderer.render(this.postScene, this.postCam);
   };
 
-  start() { this.isRunning = true; this.clock.start(); this.animate(); }
-  stop() { this.isRunning = false; cancelAnimationFrame(this.animId); }
+  start() {
+    this.isRunning = true;
+    this.clock.start();
+    this.animate();
+    window.addEventListener('click', this.clickHandler);
+  }
+  stop() {
+    this.isRunning = false;
+    cancelAnimationFrame(this.animId);
+    window.removeEventListener('click', this.clickHandler);
+  }
 
   resize(w: number, h: number) {
     this.camera.aspect = w / h; this.camera.updateProjectionMatrix();

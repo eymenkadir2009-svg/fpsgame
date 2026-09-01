@@ -13,7 +13,7 @@ export interface GameConfig {
 }
 
 export const DEFAULT_CONFIG: GameConfig = {
-  moveSpeed: 0.12,
+  moveSpeed: 0.28,
   lookSensitivity: 0.002,
   walkBounceHeight: 0.08,
   walkBounceSpeed: 8,
