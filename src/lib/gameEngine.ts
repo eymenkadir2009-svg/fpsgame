@@ -108,7 +108,7 @@ export class GameEngine {
     // Scene
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x0a0e18);
-    this.scene.fog = new THREE.FogExp2(0x0a0e18, 0.005);
+    this.scene.fog = new THREE.FogExp2(0x0a0e18, 0.003);
 
     // Camera
     const asp = container.clientWidth / container.clientHeight;
@@ -700,30 +700,46 @@ export class GameEngine {
       (gltf) => {
         const src = gltf.scene;
 
-        // Auto-scale to be small in the sky (~1.5m wide)
+        // Auto-scale to ~3m wide (visible from ground)
         const box = new THREE.Box3().setFromObject(src);
         const size = box.getSize(new THREE.Vector3());
         const maxDim = Math.max(size.x, size.y, size.z);
-        const carScale = maxDim > 0 ? 1.5 / maxDim : 0.1;
+        const carScale = maxDim > 0 ? 3.0 / maxDim : 0.1;
         src.scale.setScalar(carScale);
 
         src.traverse((child) => {
           if (child instanceof THREE.Mesh) {
             child.castShadow = true;
+            // Make hovercars exempt from fog
+            const mats = Array.isArray(child.material) ? child.material : [child.material];
+            mats.forEach(m => { m.fog = false; });
           }
         });
 
-        // 4 hovercars in an orderly formation at different heights
+        // 4 hovercars in orderly formation — visible from player start
         const configs = [
-          { radius: 20, height: 14, speed: 0.15, offsetX: 0, offsetZ: -15, startAngle: 0 },
-          { radius: 20, height: 16, speed: 0.15, offsetX: 0, offsetZ: -15, startAngle: Math.PI / 2 },
-          { radius: 20, height: 14, speed: 0.15, offsetX: 0, offsetZ: -15, startAngle: Math.PI },
-          { radius: 20, height: 16, speed: 0.15, offsetX: 0, offsetZ: -15, startAngle: Math.PI * 1.5 },
+          { radius: 15, height: 12, speed: 0.2,  cx: 0,  cz: -10, startAngle: 0 },
+          { radius: 15, height: 14, speed: 0.2,  cx: 0,  cz: -10, startAngle: Math.PI / 2 },
+          { radius: 15, height: 12, speed: 0.2,  cx: 0,  cz: -10, startAngle: Math.PI },
+          { radius: 15, height: 14, speed: 0.2,  cx: 0,  cz: -10, startAngle: Math.PI * 1.5 },
         ];
 
         configs.forEach((cfg) => {
           const car = src.clone();
-          car.position.set(0, cfg.height, 0);
+          car.position.set(cfg.cx, cfg.height, cfg.cz);
+          // Exempt from fog
+          car.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+              const mats = Array.isArray(child.material) ? child.material : [child.material];
+              mats.forEach(m => { m.fog = false; });
+            }
+          });
+
+          // Add a point light underneath for glow effect
+          const glow = new THREE.PointLight(0x00ccff, 4, 8);
+          glow.position.set(0, -0.5, 0);
+          car.add(glow);
+
           this.scene.add(car);
           this.hovercars.push({
             mesh: car,
@@ -731,8 +747,8 @@ export class GameEngine {
             radius: cfg.radius,
             height: cfg.height,
             speed: cfg.speed,
-            offsetX: cfg.offsetX,
-            offsetZ: cfg.offsetZ,
+            offsetX: cfg.cx,
+            offsetZ: cfg.cz,
           });
         });
 
@@ -751,13 +767,16 @@ export class GameEngine {
       hc.angle += hc.speed * dt;
       const x = hc.offsetX + Math.cos(hc.angle) * hc.radius;
       const z = hc.offsetZ + Math.sin(hc.angle) * hc.radius;
-      // Slight bobbing
-      const y = hc.height + Math.sin(this.t * 0.8 + hc.angle) * 0.3;
+      // Gentle bobbing
+      const y = hc.height + Math.sin(this.t * 0.6 + hc.angle * 2) * 0.4;
       hc.mesh.position.set(x, y, z);
-      // Face direction of travel (tangent)
-      hc.mesh.rotation.y = -hc.angle + Math.PI / 2;
-      // Slight banking on turns
-      hc.mesh.rotation.z = Math.sin(this.t * 0.8 + hc.angle) * 0.05;
+      // Face tangent direction of the circle
+      const nextAngle = hc.angle + 0.01;
+      const nx = hc.offsetX + Math.cos(nextAngle) * hc.radius;
+      const nz = hc.offsetZ + Math.sin(nextAngle) * hc.radius;
+      hc.mesh.lookAt(nx, y, nz);
+      // Slight roll/bank
+      hc.mesh.rotation.z = Math.sin(this.t * 0.6 + hc.angle * 2) * 0.03;
     });
   }
 
@@ -771,7 +790,11 @@ export class GameEngine {
       tex.magFilter = THREE.LinearFilter;
       tex.wrapS = THREE.RepeatWrapping;
       tex.wrapT = THREE.ClampToEdgeWrapping;
+      // Critical: equirectangular mapping for proper sky sphere rendering
+      tex.mapping = THREE.EquirectangularReflectionMapping;
       this.scene.background = tex;
+      // Also set as environment for subtle reflections on metallic surfaces
+      this.scene.environment = tex;
     };
     img.onerror = () => console.warn('Sky texture failed');
     img.src = '/sky.webp';
