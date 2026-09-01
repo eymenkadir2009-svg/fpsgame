@@ -27,6 +27,10 @@ export class GameEngine {
   // ====== NPC CHARACTERS ======
   private npcModels: THREE.Group[] = [];
 
+  // ====== SKATEBOARD ======
+  private skateboardTemplate: THREE.Group | null = null;
+  private playerSkateboard: THREE.Group | null = null;
+
   // ====== CAMERA (TPS orbit) ======
   private camDist = 3.5;
   private camHeight = 2.2;
@@ -82,7 +86,7 @@ export class GameEngine {
   // ====== TEXTURES ======
   private ready = false;
   private loadCount = 0;
-  private totalLoads = 3; // ground + player model + npc model
+  private totalLoads = 4; // ground + player model + npc model + skateboard
 
   // ====== CALLBACKS ======
   private onReady?: () => void;
@@ -142,6 +146,7 @@ export class GameEngine {
     this.loadGroundTexture();
     this.loadGLBModel();
     this.loadNPCModel();
+    this.loadSkateboardModel();
   }
 
   // ==================== LIGHTING ====================
@@ -350,6 +355,73 @@ export class GameEngine {
     );
   }
 
+  // ==================== LOAD SKATEBOARD ====================
+  private loadSkateboardModel() {
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+    const gltfLoader = new GLTFLoader();
+    gltfLoader.setDRACOLoader(dracoLoader);
+
+    gltfLoader.load(
+      '/skateboard.glb',
+      (gltf) => {
+        console.log('Skateboard GLB loaded');
+        const src = gltf.scene;
+
+        // Auto-scale to ~0.15m tall (typical skateboard)
+        const box = new THREE.Box3().setFromObject(src);
+        const size = box.getSize(new THREE.Vector3());
+        const height = size.y;
+        const sScale = height > 0 ? 0.15 / height : 1.0;
+        src.scale.setScalar(sScale);
+
+        // Center horizontally, keep bottom at y=0
+        box.setFromObject(src);
+        const cx = (box.min.x + box.max.x) / 2;
+        const cz = (box.min.z + box.max.z) / 2;
+        src.position.set(-cx, -box.min.y, -cz);
+
+        src.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+        });
+
+        this.skateboardTemplate = src;
+
+        // Attach to player
+        this.attachSkateboard(src);
+        // Attach to NPCs
+        this.npcModels.forEach(npc => this.attachSkateboard(src, npc));
+
+        this.checkReady();
+      },
+      undefined,
+      (err) => {
+        console.error('Skateboard load error:', err);
+        this.checkReady();
+      }
+    );
+  }
+
+  private attachSkateboard(template: THREE.Group, parent?: THREE.Group) {
+    const sb = template.clone();
+    sb.name = 'skateboard';
+
+    if (parent) {
+      // NPC: place at feet of the NPC
+      const b = new THREE.Box3().setFromObject(parent);
+      sb.position.y = -b.min.y; // at bottom
+      parent.add(sb);
+    } else {
+      // Player: add to charGroup
+      sb.position.y = 0;
+      this.charGroup.add(sb);
+      this.playerSkateboard = sb;
+    }
+  }
+
   // ==================== FIND BONES FOR PROCEDURAL ANIMATION ====================
   private findBones(model: THREE.Object3D) {
     model.traverse((child) => {
@@ -452,7 +524,7 @@ export class GameEngine {
 
           // Re-center on ground
           const b = new THREE.Box3().setFromObject(npc);
-          npc.position.y = -b.min.y;
+          const groundOffset = -b.min.y;
 
           npc.traverse((child) => {
             if (child instanceof THREE.Mesh) {
@@ -461,10 +533,15 @@ export class GameEngine {
             }
           });
 
-          npc.position.set(pos.x, 0, pos.z);
+          npc.position.set(pos.x, groundOffset, pos.z);
           npc.rotation.y = pos.ry;
           this.scene.add(npc);
           this.npcModels.push(npc);
+
+          // If skateboard already loaded, attach now
+          if (this.skateboardTemplate) {
+            this.attachSkateboard(this.skateboardTemplate, npc);
+          }
         });
 
         this.checkReady();
