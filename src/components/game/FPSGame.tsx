@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { GameEngine } from '@/lib/gameEngine';
 import { DEFAULT_CONFIG, CharacterState } from '@/lib/gameTypes';
 
@@ -13,17 +13,28 @@ export default function FPSGame() {
   const [isMobile, setIsMobile] = useState(false);
   const [showControls, setShowControls] = useState(true);
 
+  // Joystick state
+  const joystickRef = useRef<HTMLDivElement>(null);
+  const knobRef = useRef<HTMLDivElement>(null);
+  const joyActive = useRef(false);
+   const joyCenter = useRef({ x: 0, y: 0 });
+  const joyInput = useRef({ w: false, a: false, s: false, d: false });
+
   useEffect(() => {
     setIsMobile('ontouchstart' in window || navigator.maxTouchPoints > 0);
   }, []);
 
-  // Hide controls hint after 8 seconds
   useEffect(() => {
     if (!showOverlay) {
       const timer = setTimeout(() => setShowControls(false), 8000);
       return () => clearTimeout(timer);
     }
   }, [showOverlay]);
+
+  const updateJoystickInput = useCallback(() => {
+    if (!engineRef.current) return;
+    engineRef.current.updateInput({ ...joyInput.current });
+  }, []);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -45,7 +56,6 @@ export default function FPSGame() {
         (keyState as Record<string, boolean>)[key] = true;
         engine.updateInput(keyState as Partial<typeof keyState>);
       }
-      // Prevent page scroll on space
       if (key === ' ') e.preventDefault();
     };
 
@@ -68,7 +78,6 @@ export default function FPSGame() {
       }
     };
 
-    // Click to lock pointer
     const handleClick = () => {
       const canvas = containerRef.current?.querySelector('canvas');
       if (canvas && document.pointerLockElement !== canvas) {
@@ -82,61 +91,63 @@ export default function FPSGame() {
       engine.updateInput({ isPointerLocked: locked });
     };
 
-    // Touch controls
-    const touchState = { startX: 0, startY: 0, deltaX: 0, deltaY: 0, active: false };
+    // Right-side touch look
+    const touchState = { startX: 0, startY: 0, deltaX: 0, deltaY: 0, active: false, id: -1 };
 
     const handleTouchStart = (e: TouchEvent) => {
-      if (e.touches.length === 1) {
-        const touch = e.touches[0];
-        if (touch.clientX > window.innerWidth / 2) {
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+        // Right half = look
+        if (touch.clientX > window.innerWidth / 2 && !touchState.active) {
           touchState.active = true;
+          touchState.id = touch.identifier;
           touchState.startX = touch.clientX;
           touchState.startY = touch.clientY;
           touchState.deltaX = 0;
           touchState.deltaY = 0;
-        } else {
-          engine.updateInput({ ...keyState, w: true } as Partial<typeof keyState>);
-          keyState.w = true;
         }
-        setShowOverlay(false);
       }
       // Double touch = jump
-      if (e.touches.length === 2) {
+      if (e.touches.length >= 2) {
         engine.updateInput({ space: true });
         setTimeout(() => engine.updateInput({ space: false }), 100);
       }
+      setShowOverlay(false);
     };
 
     const handleTouchMove = (e: TouchEvent) => {
-      if (touchState.active && e.touches.length === 1) {
-        const touch = e.touches[0];
-        touchState.deltaX = touch.clientX - touchState.startX;
-        touchState.deltaY = touch.clientY - touchState.startY;
-        engine.updateInput({
-          touchStartX: touchState.startX,
-          touchStartY: touchState.startY,
-          touchDeltaX: touchState.deltaX,
-          touchDeltaY: touchState.deltaY,
-        });
+      // Joystick is handled by its own listeners
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+        if (touch.identifier === touchState.id && touchState.active) {
+          touchState.deltaX = touch.clientX - touchState.startX;
+          touchState.deltaY = touch.clientY - touchState.startY;
+          engine.updateInput({
+            touchStartX: touchState.startX,
+            touchStartY: touchState.startY,
+            touchDeltaX: touchState.deltaX,
+            touchDeltaY: touchState.deltaY,
+          });
+        }
       }
     };
 
     const handleTouchEnd = (e: TouchEvent) => {
-      if (touchState.active) {
-        touchState.active = false;
-        engine.updateInput({
-          touchStartX: null,
-          touchStartY: null,
-          touchDeltaX: 0,
-          touchDeltaY: 0,
-        });
-      } else {
-        keyState.w = false;
-        engine.updateInput(keyState as Partial<typeof keyState>);
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+        if (touch.identifier === touchState.id) {
+          touchState.active = false;
+          touchState.id = -1;
+          engine.updateInput({
+            touchStartX: null,
+            touchStartY: null,
+            touchDeltaX: 0,
+            touchDeltaY: 0,
+          });
+        }
       }
     };
 
-    // Resize
     const handleResize = () => {
       if (containerRef.current) {
         engine.resize(containerRef.current.clientWidth, containerRef.current.clientHeight);
@@ -165,7 +176,62 @@ export default function FPSGame() {
       window.removeEventListener('touchend', handleTouchEnd);
       window.removeEventListener('resize', handleResize);
     };
+  }, [updateJoystickInput]);
+
+  // ====== JOYSTICK TOUCH HANDLERS ======
+  const JOY_RADIUS = 50;
+  const JOY_DEADZONE = 12;
+
+  const onJoyStart = useCallback((e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    const rect = joystickRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    joyActive.current = true;
+    joyCenter.current = {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    };
+    e.stopPropagation();
   }, []);
+
+  const onJoyMove = useCallback((e: React.TouchEvent) => {
+    if (!joyActive.current || !knobRef.current) return;
+    const touch = e.touches[0];
+    let dx = touch.clientX - joyCenter.current.x;
+    let dy = touch.clientY - joyCenter.current.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist > JOY_RADIUS) {
+      dx = (dx / dist) * JOY_RADIUS;
+      dy = (dy / dist) * JOY_RADIUS;
+    }
+
+    knobRef.current.style.transform = `translate(${dx}px, ${dy}px)`;
+
+    const ji = joyInput.current;
+    ji.w = false; ji.a = false; ji.s = false; ji.d = false;
+
+    if (dist > JOY_DEADZONE) {
+      const nx = dx / JOY_RADIUS;
+      const ny = dy / JOY_RADIUS;
+      if (ny < -0.3) ji.w = true;  // up = forward
+      if (ny > 0.3) ji.s = true;   // down = backward
+      if (nx < -0.3) ji.a = true;  // left
+      if (nx > 0.3) ji.d = true;   // right
+    }
+
+    updateJoystickInput();
+    e.stopPropagation();
+  }, [updateJoystickInput]);
+
+  const onJoyEnd = useCallback(() => {
+    joyActive.current = false;
+    if (knobRef.current) {
+      knobRef.current.style.transform = 'translate(0px, 0px)';
+    }
+    joyInput.current = { w: false, a: false, s: false, d: false };
+    updateJoystickInput();
+  }, [updateJoystickInput]);
 
   const stateLabel: Record<CharacterState, string> = {
     idle: 'HAZIR',
@@ -200,7 +266,7 @@ export default function FPSGame() {
             3D Modeller Yükleniyor...
           </p>
           <p className="text-slate-600 text-xs font-mono mt-2">
-            Oyuncu + 5 NPC (~10MB toplam)
+            Oyuncu + 5 NPC + Kaykay (~14MB toplam)
           </p>
           <div className="mt-6 w-48 h-0.5 bg-slate-800 rounded overflow-hidden">
             <div className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded animate-pulse" style={{ width: '60%' }} />
@@ -249,8 +315,8 @@ export default function FPSGame() {
             ) : (
               <div className="space-y-3 text-slate-300 font-mono text-sm">
                 <div className="flex items-center gap-3 justify-center">
-                  <span className="px-3 py-1 bg-slate-800 rounded border border-slate-600">Sol Taraf</span>
-                  <span>İleri Yürü</span>
+                  <span className="px-3 py-1 bg-slate-800 rounded border border-slate-600">Sol Joystick</span>
+                  <span>Hareket</span>
                 </div>
                 <div className="flex items-center gap-3 justify-center">
                   <span className="px-3 py-1 bg-slate-800 rounded border border-slate-600">Sağ Sürükle</span>
@@ -302,7 +368,7 @@ export default function FPSGame() {
             </div>
           </div>
 
-          {/* Controls Hint - Bottom Center */}
+          {/* Controls Hint - Desktop */}
           {showControls && !isMobile && (
             <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 pointer-events-none animate-fade-out">
               <div className="px-5 py-3 rounded-xl bg-black/50 border border-white/10 backdrop-blur-md">
@@ -315,20 +381,48 @@ export default function FPSGame() {
             </div>
           )}
 
-          {/* Mobile Touch Controls */}
+          {/* Mobile Joystick - Left Side */}
           {isMobile && !showOverlay && (
-            <>
-              <div className="absolute left-0 bottom-0 w-1/2 h-1/3 z-20 flex items-end justify-center pb-8 pointer-events-none">
-                <div className="text-slate-500/40 font-mono text-xs tracking-widest">
-                  ↑ İLERİ
-                </div>
+            <div
+              ref={joystickRef}
+              onTouchStart={onJoyStart}
+              onTouchMove={onJoyMove}
+              onTouchEnd={onJoyEnd}
+              onTouchCancel={onJoyEnd}
+              className="absolute z-30"
+              style={{ left: '24px', top: 'calc(50% - 70px)', width: '120px', height: '120px' }}
+            >
+              {/* Outer ring */}
+              <div className="absolute inset-0 rounded-full border-2 border-cyan-400/25 bg-black/20 backdrop-blur-sm" />
+              {/* Direction labels */}
+              <div className="absolute -top-5 left-1/2 -translate-x-1/2 text-cyan-400/50 font-mono text-[10px]">W</div>
+              <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 text-cyan-400/50 font-mono text-[10px]">S</div>
+              <div className="absolute top-1/2 -left-4 -translate-y-1/2 text-cyan-400/50 font-mono text-[10px]">A</div>
+              <div className="absolute top-1/2 -right-4 -translate-y-1/2 text-cyan-400/50 font-mono text-[10px]">D</div>
+              {/* Inner knob */}
+              <div
+                ref={knobRef}
+                className="absolute rounded-full bg-cyan-400/30 border border-cyan-400/50"
+                style={{
+                  left: '50%',
+                  top: '50%',
+                  width: '48px',
+                  height: '48px',
+                  marginLeft: '-24px',
+                  marginTop: '-24px',
+                  transition: joyActive.current ? 'none' : 'transform 0.15s ease-out',
+                }}
+              />
+            </div>
+          )}
+
+          {/* Mobile: Right side look hint */}
+          {isMobile && !showOverlay && (
+            <div className="absolute right-4 bottom-6 z-20 pointer-events-none">
+              <div className="text-slate-500/30 font-mono text-[10px] tracking-widest">
+                SAĞ TARAF SÜRÜKLE → BAKIŞ
               </div>
-              <div className="absolute right-0 bottom-0 w-1/2 h-1/3 z-20 flex items-end justify-center pb-8 pointer-events-none">
-                <div className="text-slate-500/40 font-mono text-xs tracking-widest">
-                  ↻ BAKIŞ
-                </div>
-              </div>
-            </>
+            </div>
           )}
 
           {/* Bottom Left - Credit */}
@@ -336,7 +430,7 @@ export default function FPSGame() {
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-cyan-500 animate-pulse" />
               <span className="text-slate-600 font-mono text-[10px] tracking-[0.15em] uppercase">
-                Ultra Engine v4.0
+                Ultra Engine v5.0
               </span>
             </div>
           </div>

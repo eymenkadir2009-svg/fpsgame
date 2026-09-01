@@ -27,6 +27,9 @@ export class GameEngine {
   // ====== NPC CHARACTERS ======
   private npcModels: THREE.Group[] = [];
 
+  // ====== HOVERCARS ======
+  private hovercars: { mesh: THREE.Group; angle: number; radius: number; height: number; speed: number; offsetX: number; offsetZ: number }[] = [];
+
   // ====== SKATEBOARD ======
   private skateboardTemplate: THREE.Group | null = null;
   private playerSkateboard: THREE.Group | null = null;
@@ -86,7 +89,7 @@ export class GameEngine {
   // ====== TEXTURES ======
   private ready = false;
   private loadCount = 0;
-  private totalLoads = 4; // ground + player model + npc model + skateboard
+  private totalLoads = 5; // ground + player + npc + skateboard + hovercar
 
   // ====== CALLBACKS ======
   private onReady?: () => void;
@@ -143,10 +146,12 @@ export class GameEngine {
     this.setupParticles();
     this.setupEnvironment();
     this.setupPost();
+    this.loadSkyTexture();
     this.loadGroundTexture();
     this.loadGLBModel();
     this.loadNPCModel();
     this.loadSkateboardModel();
+    this.loadHovercarModel();
   }
 
   // ==================== LIGHTING ====================
@@ -410,12 +415,11 @@ export class GameEngine {
     sb.name = 'skateboard';
 
     if (parent) {
-      // NPC: place at feet of the NPC
-      const b = new THREE.Box3().setFromObject(parent);
-      sb.position.y = -b.min.y; // at bottom
+      // NPC: skateboard at y=0 in parent local space (feet level)
+      sb.position.y = 0;
       parent.add(sb);
     } else {
-      // Player: add to charGroup
+      // Player: add to charGroup at ground level
       sb.position.y = 0;
       this.charGroup.add(sb);
       this.playerSkateboard = sb;
@@ -519,12 +523,13 @@ export class GameEngine {
         ];
 
         positions.forEach((pos, i) => {
+          const wrapper = new THREE.Group();
           const npc = sourceModel.clone();
           npc.scale.setScalar(npcScale);
 
-          // Re-center on ground
+          // Re-center model on ground within wrapper (local y=0 = feet)
           const b = new THREE.Box3().setFromObject(npc);
-          const groundOffset = -b.min.y;
+          npc.position.y = -b.min.y;
 
           npc.traverse((child) => {
             if (child instanceof THREE.Mesh) {
@@ -533,14 +538,15 @@ export class GameEngine {
             }
           });
 
-          npc.position.set(pos.x, groundOffset, pos.z);
-          npc.rotation.y = pos.ry;
-          this.scene.add(npc);
-          this.npcModels.push(npc);
+          wrapper.add(npc);
+          wrapper.position.set(pos.x, 0, pos.z);
+          wrapper.rotation.y = pos.ry;
+          this.scene.add(wrapper);
+          this.npcModels.push(wrapper);
 
-          // If skateboard already loaded, attach now
+          // If skateboard already loaded, attach at wrapper y=0 (feet)
           if (this.skateboardTemplate) {
-            this.attachSkateboard(this.skateboardTemplate, npc);
+            this.attachSkateboard(this.skateboardTemplate, wrapper);
           }
         });
 
@@ -680,6 +686,95 @@ export class GameEngine {
       depthWrite: false, depthTest: false,
     });
     this.postScene.add(new THREE.Mesh(geo, this.postMat));
+  }
+
+  // ==================== HOVERCARS (flying in sky) ====================
+  private loadHovercarModel() {
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+    const gltfLoader = new GLTFLoader();
+    gltfLoader.setDRACOLoader(dracoLoader);
+
+    gltfLoader.load(
+      '/hovercar.glb',
+      (gltf) => {
+        const src = gltf.scene;
+
+        // Auto-scale to be small in the sky (~1.5m wide)
+        const box = new THREE.Box3().setFromObject(src);
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const carScale = maxDim > 0 ? 1.5 / maxDim : 0.1;
+        src.scale.setScalar(carScale);
+
+        src.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            child.castShadow = true;
+          }
+        });
+
+        // 4 hovercars in an orderly formation at different heights
+        const configs = [
+          { radius: 20, height: 14, speed: 0.15, offsetX: 0, offsetZ: -15, startAngle: 0 },
+          { radius: 20, height: 16, speed: 0.15, offsetX: 0, offsetZ: -15, startAngle: Math.PI / 2 },
+          { radius: 20, height: 14, speed: 0.15, offsetX: 0, offsetZ: -15, startAngle: Math.PI },
+          { radius: 20, height: 16, speed: 0.15, offsetX: 0, offsetZ: -15, startAngle: Math.PI * 1.5 },
+        ];
+
+        configs.forEach((cfg) => {
+          const car = src.clone();
+          car.position.set(0, cfg.height, 0);
+          this.scene.add(car);
+          this.hovercars.push({
+            mesh: car,
+            angle: cfg.startAngle,
+            radius: cfg.radius,
+            height: cfg.height,
+            speed: cfg.speed,
+            offsetX: cfg.offsetX,
+            offsetZ: cfg.offsetZ,
+          });
+        });
+
+        this.checkReady();
+      },
+      undefined,
+      (err) => {
+        console.error('Hovercar load error:', err);
+        this.checkReady();
+      }
+    );
+  }
+
+  private updateHovercars(dt: number) {
+    this.hovercars.forEach((hc) => {
+      hc.angle += hc.speed * dt;
+      const x = hc.offsetX + Math.cos(hc.angle) * hc.radius;
+      const z = hc.offsetZ + Math.sin(hc.angle) * hc.radius;
+      // Slight bobbing
+      const y = hc.height + Math.sin(this.t * 0.8 + hc.angle) * 0.3;
+      hc.mesh.position.set(x, y, z);
+      // Face direction of travel (tangent)
+      hc.mesh.rotation.y = -hc.angle + Math.PI / 2;
+      // Slight banking on turns
+      hc.mesh.rotation.z = Math.sin(this.t * 0.8 + hc.angle) * 0.05;
+    });
+  }
+
+  // ==================== SKYBOX ====================
+  private loadSkyTexture() {
+    const img = new Image(); img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const tex = new THREE.Texture(img); tex.needsUpdate = true;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      this.scene.background = tex;
+    };
+    img.onerror = () => console.warn('Sky texture failed');
+    img.src = '/sky.webp';
   }
 
   // ==================== GROUND TEXTURE ====================
@@ -876,6 +971,7 @@ export class GameEngine {
     this.updateCamera();
     this.updateContactShadow();
     this.updateShadowLight();
+    this.updateHovercars(dt);
 
     // Update animation mixer
     if (this.charMixer) this.charMixer.update(dt);
