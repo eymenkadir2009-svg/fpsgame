@@ -89,9 +89,6 @@ export class GameEngine {
   // ====== BUILDINGS ======
   private buildingModels: THREE.Group[] = [];
 
-  // ====== COLLISION BOXES (XZ ground plane) ======
-  private obstacleBoxes: { minX: number; minZ: number; maxX: number; maxZ: number }[] = [];
-
   // ====== CRYSTAL GENERATORS ======
   private crystalModels: THREE.Group[] = [];
   private crystalCooldowns: Map<THREE.Group, number> = new Map();
@@ -103,7 +100,7 @@ export class GameEngine {
   // ====== TEXTURES ======
   private ready = false;
   private loadCount = 0;
-  private totalLoads = 8; // ground + player + npc + skateboard + hovercar + building + crystal + skyscraper
+  private totalLoads = 7; // ground + player + npc + skateboard + hovercar + building + crystal
 
   // ====== CALLBACKS ======
   private onReady?: () => void;
@@ -168,7 +165,6 @@ export class GameEngine {
     this.loadHovercarModel();
     this.loadBuildingModel();
     this.loadCrystalModel();
-    this.loadSkyscraperModel();
   }
 
   // ==================== LIGHTING ====================
@@ -530,13 +526,13 @@ export class GameEngine {
         const maxDim = Math.max(size.x, size.y, size.z);
         const npcScale = maxDim > 0 ? 2.0 / maxDim : 1.0;
 
-        // 5 NPC positions — clear of building zones
+        // 5 NPC positions spread around the scene
         const positions = [
           { x: 8, z: -5, ry: 0.5 },
-          { x: -8, z: -8, ry: 2.0 },
-          { x: 5, z: -15, ry: 3.5 },
-          { x: -6, z: -42, ry: 1.2 },
-          { x: 12, z: -35, ry: 4.8 },
+          { x: -6, z: -10, ry: 2.0 },
+          { x: 4, z: -18, ry: 3.5 },
+          { x: -10, z: -22, ry: 1.2 },
+          { x: 14, z: -15, ry: 4.8 },
         ];
 
         positions.forEach((pos, i) => {
@@ -560,12 +556,6 @@ export class GameEngine {
           wrapper.rotation.y = pos.ry;
           this.scene.add(wrapper);
           this.npcModels.push(wrapper);
-
-          // NPC collision box (1.5m radius)
-          this.obstacleBoxes.push({
-            minX: pos.x - 1.5, minZ: pos.z - 1.5,
-            maxX: pos.x + 1.5, maxZ: pos.z + 1.5,
-          });
 
           // If skateboard already loaded, attach at wrapper y=0 (feet)
           if (this.skateboardTemplate) {
@@ -720,16 +710,16 @@ export class GameEngine {
         const maxDim = Math.max(size.x, size.y, size.z);
         const bScale = maxDim > 0 ? 45.0 / maxDim : 1.0;
 
-        // Building positions — well spread out, no overlaps
+        // Building positions spread around the scene
         const positions = [
-          { x: 30, z: -20, ry: 0.3, s: bScale },
-          { x: -30, z: -30, ry: 1.8, s: bScale * 0.85 },
-          { x: 40, z: -55, ry: 0.9, s: bScale * 1.15 },
-          { x: -40, z: -15, ry: 2.5, s: bScale * 0.75 },
-          { x: 20, z: -65, ry: 4.2, s: bScale * 0.95 },
-          { x: -25, z: -60, ry: 1.1, s: bScale * 1.05 },
-          { x: 50, z: -10, ry: 3.0, s: bScale * 0.65 },
-          { x: -50, z: -50, ry: 0.5, s: bScale * 1.2 },
+          { x: 25, z: -18, ry: 0.3, s: bScale },
+          { x: -22, z: -25, ry: 1.8, s: bScale * 0.85 },
+          { x: 30, z: -45, ry: 0.9, s: bScale * 1.15 },
+          { x: -30, z: -12, ry: 2.5, s: bScale * 0.75 },
+          { x: 12, z: -50, ry: 4.2, s: bScale * 0.95 },
+          { x: -15, z: -48, ry: 1.1, s: bScale * 1.05 },
+          { x: 40, z: -8, ry: 3.0, s: bScale * 0.65 },
+          { x: -38, z: -38, ry: 0.5, s: bScale * 1.2 },
         ];
 
         positions.forEach((pos) => {
@@ -753,13 +743,6 @@ export class GameEngine {
           wrapper.rotation.y = pos.ry;
           this.scene.add(wrapper);
           this.buildingModels.push(wrapper);
-
-          // Add collision box (XZ footprint with 1m padding)
-          const bb = new THREE.Box3().setFromObject(wrapper);
-          this.obstacleBoxes.push({
-            minX: bb.min.x - 1, minZ: bb.min.z - 1,
-            maxX: bb.max.x + 1, maxZ: bb.max.z + 1,
-          });
         });
 
         this.checkReady();
@@ -921,12 +904,12 @@ export class GameEngine {
             if (child instanceof THREE.Mesh) {
               child.castShadow = true;
               child.receiveShadow = true;
-              // Make crystals glow with emissive purple-pink
+              // Make crystals glow with emissive
               const mats = Array.isArray(child.material) ? child.material : [child.material];
               mats.forEach(m => {
                 if (m instanceof THREE.MeshStandardMaterial) {
-                  m.emissive = new THREE.Color(0xcc44ff);
-                  m.emissiveIntensity = 1.2;
+                  m.emissive = new THREE.Color(0x4488ff);
+                  m.emissiveIntensity = 1.0;
                 }
               });
             }
@@ -939,13 +922,13 @@ export class GameEngine {
           this.crystalModels.push(wrapper);
 
           // Add a point light above each crystal for glow effect
-          const glow = new THREE.PointLight(0xcc44ff, 5, 8);
+          const glow = new THREE.PointLight(0x44aaff, 4, 8);
           glow.position.set(0, 2, 0);
           wrapper.add(glow);
 
           // Add a floating diamond indicator above
           const indicatorGeo = new THREE.OctahedronGeometry(0.15, 0);
-          const indicatorMat = new THREE.MeshBasicMaterial({ color: 0xdd66ff, transparent: true, opacity: 0.8 });
+          const indicatorMat = new THREE.MeshBasicMaterial({ color: 0x44ddff, transparent: true, opacity: 0.8 });
           const indicator = new THREE.Mesh(indicatorGeo, indicatorMat);
           indicator.position.y = 2.5;
           indicator.name = 'diamond_indicator';
@@ -978,82 +961,16 @@ export class GameEngine {
         const lastCollect = this.crystalCooldowns.get(wrapper) || 0;
         const elapsed = Date.now() - lastCollect;
         if (elapsed >= 120000) {
-          // Ready - bright purple-pink pulse
+          // Ready - bright pulse
           indMat.opacity = 0.6 + Math.sin(this.t * 4) * 0.3;
-          indMat.color.set(0xff44cc);
+          indMat.color.set(0x44ffdd);
         } else {
           // On cooldown - dim
           indMat.opacity = 0.2;
-          indMat.color.set(0x553355);
+          indMat.color.set(0x444444);
         }
       }
     });
-  }
-
-  // ==================== LOAD SKYSCRAPER ====================
-  private loadSkyscraperModel() {
-    const dracoLoader = new DRACOLoader();
-    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
-    const gltfLoader = new GLTFLoader();
-    gltfLoader.setDRACOLoader(dracoLoader);
-
-    gltfLoader.load(
-      '/skyscraper.glb',
-      (gltf) => {
-        console.log('Skyscraper GLB loaded');
-        const sourceModel = gltf.scene;
-
-        // Same scale as office_building (~45m tall)
-        const box = new THREE.Box3().setFromObject(sourceModel);
-        const size = box.getSize(new THREE.Vector3());
-        const maxDim = Math.max(size.x, size.y, size.z);
-        const sScale = maxDim > 0 ? 45.0 / maxDim : 1.0;
-
-        const positions = [
-          { x: -20, z: -20, ry: 0.8 },
-          { x: 45, z: -35, ry: 2.1 },
-          { x: -50, z: -40, ry: 3.7 },
-          { x: 15, z: -80, ry: 5.2 },
-          { x: -15, z: -85, ry: 1.5 },
-        ];
-
-        positions.forEach((pos) => {
-          const wrapper = new THREE.Group();
-          const bld = sourceModel.clone();
-          bld.scale.setScalar(sScale);
-
-          const b = new THREE.Box3().setFromObject(bld);
-          bld.position.y = -b.min.y;
-
-          bld.traverse((child) => {
-            if (child instanceof THREE.Mesh) {
-              child.castShadow = true;
-              child.receiveShadow = true;
-            }
-          });
-
-          wrapper.add(bld);
-          wrapper.position.set(pos.x, 0, pos.z);
-          wrapper.rotation.y = pos.ry;
-          this.scene.add(wrapper);
-          this.buildingModels.push(wrapper);
-
-          // Add collision box
-          const bb = new THREE.Box3().setFromObject(wrapper);
-          this.obstacleBoxes.push({
-            minX: bb.min.x - 1, minZ: bb.min.z - 1,
-            maxX: bb.max.x + 1, maxZ: bb.max.z + 1,
-          });
-        });
-
-        this.checkReady();
-      },
-      undefined,
-      (err) => {
-        console.error('Skyscraper GLB load error:', err);
-        this.checkReady();
-      }
-    );
   }
 
   // ==================== SKY DOME ====================
@@ -1243,24 +1160,8 @@ export class GameEngine {
 
     if (moving && this.isGrounded) {
       dir.normalize().multiplyScalar(this.config.moveSpeed);
-      const newX = this.charWorldPos.x + dir.x;
-      const newZ = this.charWorldPos.z + dir.z;
-
-      // Collision check — try X and Z independently for wall sliding
-      const R = 0.5; // player radius
-      let canX = true, canZ = true;
-      for (const ob of this.obstacleBoxes) {
-        // Check X movement
-        if (newX + R > ob.minX && newX - R < ob.maxX && this.charWorldPos.z + R > ob.minZ && this.charWorldPos.z - R < ob.maxZ) {
-          canX = false;
-        }
-        // Check Z movement
-        if (this.charWorldPos.x + R > ob.minX && this.charWorldPos.x - R < ob.maxX && newZ + R > ob.minZ && newZ - R < ob.maxZ) {
-          canZ = false;
-        }
-      }
-      if (canX) this.charWorldPos.x = newX;
-      if (canZ) this.charWorldPos.z = newZ;
+      this.charWorldPos.x += dir.x;
+      this.charWorldPos.z += dir.z;
 
       const targetRot = Math.atan2(dir.x, dir.z);
       this.charRotation += shortAngleDist(this.charRotation, targetRot) * 0.15;
