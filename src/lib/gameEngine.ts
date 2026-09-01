@@ -86,10 +86,16 @@ export class GameEngine {
   private turnBlur = 0;
   private prevYaw = 0;
 
+  // ====== BUILDINGS ======
+  private buildingModels: THREE.Group[] = [];
+
+  // ====== SKY DOME ======
+  private skyDome: THREE.Mesh | null = null;
+
   // ====== TEXTURES ======
   private ready = false;
   private loadCount = 0;
-  private totalLoads = 5; // ground + player + npc + skateboard + hovercar
+  private totalLoads = 6; // ground + player + npc + skateboard + hovercar + building
 
   // ====== CALLBACKS ======
   private onReady?: () => void;
@@ -152,6 +158,7 @@ export class GameEngine {
     this.loadNPCModel();
     this.loadSkateboardModel();
     this.loadHovercarModel();
+    this.loadBuildingModel();
   }
 
   // ==================== LIGHTING ====================
@@ -650,16 +657,8 @@ export class GameEngine {
       const pl = new THREE.PointLight(0x4488ff, 2, 10); pl.position.set(x, 6.15, z); this.scene.add(pl);
     });
 
-    for (let i = 0; i < 40; i++) {
-      const w = Math.random() * 5 + 1, h = Math.random() * 10 + 3, d = Math.random() * 5 + 1;
-      const b = new THREE.Mesh(
-        new THREE.BoxGeometry(w, h, d),
-        new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(0.55 + Math.random() * 0.1, 0.3, 0.05 + Math.random() * 0.04), metalness: 0.7, roughness: 0.4 })
-      );
-      const a = Math.random() * Math.PI * 2, r = 25 + Math.random() * 50;
-      b.position.set(Math.cos(a) * r, h / 2, Math.sin(a) * r);
-      b.castShadow = true; this.scene.add(b);
-    }
+    // Buildings are now loaded from GLB (loadBuildingModel)
+    // Kept only orbs and poles here for decoration
   }
 
   // ==================== POST PROCESSING ====================
@@ -688,6 +687,70 @@ export class GameEngine {
     this.postScene.add(new THREE.Mesh(geo, this.postMat));
   }
 
+  // ==================== LOAD BUILDING ====================
+  private loadBuildingModel() {
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+    const gltfLoader = new GLTFLoader();
+    gltfLoader.setDRACOLoader(dracoLoader);
+
+    gltfLoader.load(
+      '/office_building.glb',
+      (gltf) => {
+        console.log('Building GLB loaded');
+        const sourceModel = gltf.scene;
+
+        // Auto-scale building to ~15m tall (realistic office building)
+        const box = new THREE.Box3().setFromObject(sourceModel);
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const bScale = maxDim > 0 ? 15.0 / maxDim : 1.0;
+
+        // Random building positions spread around the scene
+        const positions = [
+          { x: 20, z: -15, ry: 0.3, s: bScale },
+          { x: -18, z: -20, ry: 1.8, s: bScale * 0.8 },
+          { x: 25, z: -35, ry: 0.9, s: bScale * 1.1 },
+          { x: -25, z: -10, ry: 2.5, s: bScale * 0.7 },
+          { x: 10, z: -40, ry: 4.2, s: bScale * 0.9 },
+          { x: -12, z: -38, ry: 1.1, s: bScale },
+          { x: 35, z: -5, ry: 3.0, s: bScale * 0.6 },
+          { x: -30, z: -30, ry: 0.5, s: bScale * 1.2 },
+        ];
+
+        positions.forEach((pos) => {
+          const wrapper = new THREE.Group();
+          const bld = sourceModel.clone();
+          bld.scale.setScalar(pos.s);
+
+          // Center on ground within wrapper
+          const b = new THREE.Box3().setFromObject(bld);
+          bld.position.y = -b.min.y;
+
+          bld.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+            }
+          });
+
+          wrapper.add(bld);
+          wrapper.position.set(pos.x, 0, pos.z);
+          wrapper.rotation.y = pos.ry;
+          this.scene.add(wrapper);
+          this.buildingModels.push(wrapper);
+        });
+
+        this.checkReady();
+      },
+      undefined,
+      (err) => {
+        console.error('Building GLB load error:', err);
+        this.checkReady();
+      }
+    );
+  }
+
   // ==================== HOVERCARS (flying in sky) ====================
   private loadHovercarModel() {
     const dracoLoader = new DRACOLoader();
@@ -700,34 +763,40 @@ export class GameEngine {
       (gltf) => {
         const src = gltf.scene;
 
-        // Auto-scale to ~3m wide (visible from ground)
+        // Auto-scale to ~4m wide (more visible from ground)
         const box = new THREE.Box3().setFromObject(src);
         const size = box.getSize(new THREE.Vector3());
         const maxDim = Math.max(size.x, size.y, size.z);
-        const carScale = maxDim > 0 ? 3.0 / maxDim : 0.1;
+        const carScale = maxDim > 0 ? 4.0 / maxDim : 0.1;
         src.scale.setScalar(carScale);
 
+        // Make all materials emissive so hovercars glow against dark sky + exempt from fog
         src.traverse((child) => {
           if (child instanceof THREE.Mesh) {
             child.castShadow = true;
-            // Make hovercars exempt from fog
             const mats = Array.isArray(child.material) ? child.material : [child.material];
-            mats.forEach(m => { m.fog = false; });
+            mats.forEach(m => {
+              if (m instanceof THREE.MeshStandardMaterial) {
+                m.emissive = new THREE.Color(0x114466);
+                m.emissiveIntensity = 1.5;
+              }
+              m.fog = false;
+            });
           }
         });
 
-        // 4 hovercars in orderly formation — visible from player start
+        // 4 hovercars in orderly formation centered near player
         const configs = [
-          { radius: 15, height: 12, speed: 0.2,  cx: 0,  cz: -10, startAngle: 0 },
-          { radius: 15, height: 14, speed: 0.2,  cx: 0,  cz: -10, startAngle: Math.PI / 2 },
-          { radius: 15, height: 12, speed: 0.2,  cx: 0,  cz: -10, startAngle: Math.PI },
-          { radius: 15, height: 14, speed: 0.2,  cx: 0,  cz: -10, startAngle: Math.PI * 1.5 },
+          { radius: 12, height: 10, speed: 0.15, cx: 0, cz: -8, startAngle: 0 },
+          { radius: 12, height: 12, speed: 0.15, cx: 0, cz: -8, startAngle: Math.PI / 2 },
+          { radius: 12, height: 10, speed: 0.15, cx: 0, cz: -8, startAngle: Math.PI },
+          { radius: 12, height: 12, speed: 0.15, cx: 0, cz: -8, startAngle: Math.PI * 1.5 },
         ];
 
         configs.forEach((cfg) => {
           const car = src.clone();
           car.position.set(cfg.cx, cfg.height, cfg.cz);
-          // Exempt from fog
+          // Exempt cloned meshes from fog
           car.traverse((child) => {
             if (child instanceof THREE.Mesh) {
               const mats = Array.isArray(child.material) ? child.material : [child.material];
@@ -735,10 +804,15 @@ export class GameEngine {
             }
           });
 
-          // Add a point light underneath for glow effect
-          const glow = new THREE.PointLight(0x00ccff, 4, 8);
-          glow.position.set(0, -0.5, 0);
+          // Strong point light underneath for visible glow
+          const glow = new THREE.PointLight(0x00ccff, 8, 15);
+          glow.position.set(0, -1, 0);
           car.add(glow);
+
+          // Secondary orange tail light
+          const tail = new THREE.PointLight(0xff6600, 3, 6);
+          tail.position.set(0, 0, 1.5);
+          car.add(tail);
 
           this.scene.add(car);
           this.hovercars.push({
@@ -780,24 +854,41 @@ export class GameEngine {
     });
   }
 
-  // ==================== SKYBOX ====================
+  // ==================== SKY DOME ====================
   private loadSkyTexture() {
-    const img = new Image(); img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      const tex = new THREE.Texture(img); tex.needsUpdate = true;
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.minFilter = THREE.LinearMipmapLinearFilter;
-      tex.magFilter = THREE.LinearFilter;
-      tex.wrapS = THREE.RepeatWrapping;
-      tex.wrapT = THREE.ClampToEdgeWrapping;
-      // Critical: equirectangular mapping for proper sky sphere rendering
-      tex.mapping = THREE.EquirectangularReflectionMapping;
-      this.scene.background = tex;
-      // Also set as environment for subtle reflections on metallic surfaces
-      this.scene.environment = tex;
-    };
-    img.onerror = () => console.warn('Sky texture failed');
-    img.src = '/sky.webp';
+    const loader = new THREE.TextureLoader();
+    loader.load('/sky.webp',
+      (tex) => {
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+
+        // Create a large inverted sphere as sky dome — always visible, no mapping tricks
+        const skyGeo = new THREE.SphereGeometry(200, 64, 32);
+        const skyMat = new THREE.MeshBasicMaterial({
+          map: tex,
+          side: THREE.BackSide, // Render inside of sphere
+          fog: false,           // Never affected by fog
+          depthWrite: false,    // Always behind everything
+        });
+        this.skyDome = new THREE.Mesh(skyGeo, skyMat);
+        this.scene.add(this.skyDome);
+
+        // Also generate PMREM for environment reflections on metallic surfaces
+        const equirectTex = tex.clone();
+        equirectTex.mapping = THREE.EquirectangularReflectionMapping;
+        const pmrem = new THREE.PMREMGenerator(this.renderer);
+        pmrem.compileEquirectangularShader();
+        const envRT = pmrem.fromEquirectangular(equirectTex);
+        this.scene.environment = envRT.texture;
+        pmrem.dispose();
+        equirectTex.dispose();
+
+        console.log('Sky dome created successfully');
+      },
+      undefined,
+      (err) => console.warn('Sky texture failed to load:', err)
+    );
   }
 
   // ==================== GROUND TEXTURE ====================
@@ -981,6 +1072,13 @@ export class GameEngine {
     this.postMat.uniforms.uVignette.value = 1.3 + this.turnBlur * 0.3;
   }
 
+  // ==================== SKY DOME FOLLOW CAMERA ====================
+  private updateSkyDome() {
+    if (!this.skyDome) return;
+    // Sky dome always centered on camera position so it never clips
+    this.skyDome.position.copy(this.camera.position);
+  }
+
   // ==================== MAIN LOOP ====================
   private animate = () => {
     if (!this.isRunning) return;
@@ -995,6 +1093,7 @@ export class GameEngine {
     this.updateContactShadow();
     this.updateShadowLight();
     this.updateHovercars(dt);
+    this.updateSkyDome();
 
     // Update animation mixer
     if (this.charMixer) this.charMixer.update(dt);
