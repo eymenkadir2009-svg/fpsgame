@@ -14,8 +14,6 @@ export default function FPSGame() {
   const [showControls, setShowControls] = useState(true);
   const [showMountPrompt, setShowMountPrompt] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
-  const [diamonds, setDiamonds] = useState(0);
-  const [showDiamondPopup, setShowDiamondPopup] = useState(false);
 
   useEffect(() => {
     setIsMobile('ontouchstart' in window || navigator.maxTouchPoints > 0);
@@ -45,11 +43,6 @@ export default function FPSGame() {
     engine.setOnReady(() => setIsLoaded(true));
     engine.setOnMountChange((mounted) => setIsMounted(mounted));
     engine.setOnMountPrompt((show) => setShowMountPrompt(show));
-    engine.setOnDiamondCollect((amount) => {
-      setDiamonds(prev => prev + amount);
-      setShowDiamondPopup(true);
-      setTimeout(() => setShowDiamondPopup(false), 1500);
-    });
 
     engine.start();
 
@@ -98,13 +91,8 @@ export default function FPSGame() {
       }
     };
 
-    const handleClick = (e: MouseEvent) => {
+    const handleClick = () => {
       const canvas = containerRef.current?.querySelector('canvas');
-      if (document.pointerLockElement === canvas) {
-        // Try crystal collection on left click when locked
-        engine.tryCollectCrystal(e.clientX, e.clientY);
-        return;
-      }
       if (canvas && document.pointerLockElement !== canvas) {
         canvas.requestPointerLock();
         setShowOverlay(false);
@@ -361,19 +349,6 @@ export default function FPSGame() {
               </div>
             </div>
           )}
-
-          {/* Diamond Counter - Top Center */}
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
-            <div className="px-4 py-2 rounded-lg bg-purple-500/15 border border-purple-500/30 backdrop-blur-md flex items-center gap-2">
-              <span className="text-purple-400 text-lg">\u2666</span>
-              <span className="font-mono font-bold text-sm text-purple-300">{diamonds}</span>
-            </div>
-            {showDiamondPopup && (
-              <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 animate-bounce">
-                <span className="text-purple-400 font-mono text-xs font-bold">+10 \u2666</span>
-              </div>
-            )}
-          </div>
 
           {/* State Indicator - Top Left */}
           <div className="absolute top-4 left-4 z-30 pointer-events-none">
