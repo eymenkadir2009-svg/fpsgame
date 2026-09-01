@@ -1,4 +1,4 @@
-export type CharacterState = 'idle' | 'walking_forward' | 'walking_backward' | 'jumping' | 'riding' | 'riding_forward' | 'riding_backward';
+export type CharacterState = 'idle' | 'walking_forward' | 'walking_backward' | 'jumping';
 
 export interface GameConfig {
   moveSpeed: number;
@@ -10,12 +10,10 @@ export interface GameConfig {
   blurIntensity: number;
   turnBlurIntensity: number;
   asmrIntensity: number;
-  motorcycleSpeed: number;
-  motorcycleTurnSpeed: number;
 }
 
 export const DEFAULT_CONFIG: GameConfig = {
-  moveSpeed: 0.12,
+  moveSpeed: 0.28,
   lookSensitivity: 0.002,
   walkBounceHeight: 0.08,
   walkBounceSpeed: 8,
@@ -24,8 +22,6 @@ export const DEFAULT_CONFIG: GameConfig = {
   blurIntensity: 1.2,
   turnBlurIntensity: 2.0,
   asmrIntensity: 0.8,
-  motorcycleSpeed: 0.45,
-  motorcycleTurnSpeed: 0.035,
 };
 
 export interface InputState {
@@ -38,7 +34,6 @@ export interface InputState {
   mouseY: number;
   isMouseDown: boolean;
   isPointerLocked: boolean;
-  rightClick: boolean;
   touchStartX: number | null;
   touchStartY: number | null;
   touchDeltaX: number;
