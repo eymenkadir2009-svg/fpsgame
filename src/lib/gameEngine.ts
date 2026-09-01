@@ -24,9 +24,12 @@ export class GameEngine {
   private charRotation = 0;
   private modelLoaded = false;
 
+  // ====== NPC CHARACTERS ======
+  private npcModels: THREE.Group[] = [];
+
   // ====== CAMERA (TPS orbit) ======
-  private camDist = 6;
-  private camHeight = 3.5;
+  private camDist = 3.5;
+  private camHeight = 2.2;
   private camSmoothPos = new THREE.Vector3();
   private camSmoothLook = new THREE.Vector3();
 
@@ -47,37 +50,49 @@ export class GameEngine {
   // ====== ENVIRONMENT ======
   private orbs: THREE.Mesh[] = [];
 
-  // ====== SHOOT FX ======
-  private shootTimer = 0;
-  private shootRings: THREE.Mesh[] = [];
-  private muzzleLight!: THREE.PointLight;
+  // ====== CONTACT SHADOW ======
+  private contactShadow!: THREE.Mesh;
+  private contactShadowMat!: THREE.ShaderMaterial;
+
+  // ====== JUMP PHYSICS ======
+  private velocityY = 0;
+  private isGrounded = true;
+
+  // ====== ARM SWING ======
+  private leftArm: THREE.Bone | null = null;
+  private rightArm: THREE.Bone | null = null;
+  private leftForearm: THREE.Bone | null = null;
+  private rightForearm: THREE.Bone | null = null;
+  private leftLeg: THREE.Bone | null = null;
+  private rightLeg: THREE.Bone | null = null;
+  private leftCalf: THREE.Bone | null = null;
+  private rightCalf: THREE.Bone | null = null;
 
   // ====== STATE ======
   private config: GameConfig;
   private input: InputState;
   private charState: CharacterState = 'idle';
   private yaw = Math.PI;
-  private pitch = 0.3;
+  private pitch = 0.25;
   private walkTime = 0;
   private t = 0;
   private turnBlur = 0;
   private prevYaw = 0;
 
   // ====== TEXTURES ======
-  private groundImg: HTMLImageElement | null = null;
   private ready = false;
   private loadCount = 0;
+  private totalLoads = 3; // ground + player model + npc model
 
   // ====== CALLBACKS ======
   private onReady?: () => void;
   private onState?: (s: CharacterState) => void;
-  private onModelLoadProgress?: (pct: number) => void;
 
   constructor(container: HTMLElement, config: GameConfig) {
     this.container = container;
     this.config = config;
     this.input = {
-      w: false, a: false, s: false, d: false,
+      w: false, a: false, s: false, d: false, space: false,
       mouseX: 0, mouseY: 0, isMouseDown: false, isPointerLocked: false,
       touchStartX: null, touchStartY: null, touchDeltaX: 0, touchDeltaY: 0,
     };
@@ -86,11 +101,11 @@ export class GameEngine {
     // Scene
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x0a0e18);
-    this.scene.fog = new THREE.FogExp2(0x0a0e18, 0.006);
+    this.scene.fog = new THREE.FogExp2(0x0a0e18, 0.005);
 
     // Camera
     const asp = container.clientWidth / container.clientHeight;
-    this.camera = new THREE.PerspectiveCamera(50, asp, 0.1, 500);
+    this.camera = new THREE.PerspectiveCamera(55, asp, 0.1, 500);
 
     // Renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -119,46 +134,62 @@ export class GameEngine {
     // Build everything
     this.setupLighting();
     this.setupGround();
+    this.setupContactShadow();
     this.setupPlaceholderChar();
     this.setupParticles();
     this.setupEnvironment();
     this.setupPost();
-    this.setupMuzzleFlash();
     this.loadGroundTexture();
     this.loadGLBModel();
+    this.loadNPCModel();
   }
 
   // ==================== LIGHTING ====================
+  private dirLight!: THREE.DirectionalLight;
   private setupLighting() {
-    this.scene.add(new THREE.AmbientLight(0x556677, 1.8));
+    this.scene.add(new THREE.AmbientLight(0x556677, 1.5));
 
-    const dir = new THREE.DirectionalLight(0x8899cc, 3.0);
-    dir.position.set(8, 15, 8);
-    dir.castShadow = true;
-    dir.shadow.mapSize.set(2048, 2048);
-    dir.shadow.camera.near = 0.5; dir.shadow.camera.far = 80;
+    this.dirLight = new THREE.DirectionalLight(0x8899cc, 3.5);
+    this.dirLight.position.set(8, 18, 8);
+    this.dirLight.castShadow = true;
+    this.dirLight.shadow.mapSize.set(4096, 4096);
+    this.dirLight.shadow.camera.near = 0.5;
+    this.dirLight.shadow.camera.far = 80;
     const s = 30;
-    dir.shadow.camera.left = -s; dir.shadow.camera.right = s;
-    dir.shadow.camera.top = s; dir.shadow.camera.bottom = -s;
-    dir.shadow.bias = -0.001;
-    this.scene.add(dir);
+    this.dirLight.shadow.camera.left = -s;
+    this.dirLight.shadow.camera.right = s;
+    this.dirLight.shadow.camera.top = s;
+    this.dirLight.shadow.camera.bottom = -s;
+    this.dirLight.shadow.bias = -0.0005;
+    this.dirLight.shadow.normalBias = 0.02;
+    this.scene.add(this.dirLight);
 
-    this.scene.add(new THREE.DirectionalLight(0xff8855, 0.6).translateX(-5).translateY(4).translateZ(-8));
-    this.scene.add(new THREE.HemisphereLight(0x5577aa, 0x334422, 0.8));
+    const dir2 = new THREE.DirectionalLight(0xff8855, 0.8);
+    dir2.position.set(-5, 4, -8);
+    this.scene.add(dir2);
+
+    this.scene.add(new THREE.HemisphereLight(0x5577aa, 0x334422, 1.0));
 
     // Spotlight on character
-    const spot = new THREE.SpotLight(0xffffff, 4, 20, Math.PI / 4, 0.5, 1);
-    spot.position.set(0, 10, 0);
+    const spot = new THREE.SpotLight(0xeeeeff, 5, 25, Math.PI / 4, 0.5, 1);
+    spot.position.set(0, 12, 0);
     spot.castShadow = true;
-    spot.shadow.mapSize.set(1024, 1024);
+    spot.shadow.mapSize.set(2048, 2048);
+    spot.shadow.bias = -0.0003;
+    spot.shadow.normalBias = 0.02;
     this.scene.add(spot);
     this.scene.add(spot.target);
+
+    // Soft fill light from below-behind for better shadow contrast
+    const fill = new THREE.PointLight(0x445566, 1.5, 15);
+    fill.position.set(0, 0.5, 3);
+    this.scene.add(fill);
   }
 
   // ==================== GROUND ====================
   private setupGround() {
     const geo = new THREE.PlaneGeometry(300, 300);
-    this.groundMat = new THREE.MeshStandardMaterial({ color: 0x446655, roughness: 0.8, metalness: 0.1 });
+    this.groundMat = new THREE.MeshStandardMaterial({ color: 0x446655, roughness: 0.75, metalness: 0.1 });
     this.groundMesh = new THREE.Mesh(geo, this.groundMat);
     this.groundMesh.rotation.x = -Math.PI / 2;
     this.groundMesh.receiveShadow = true;
@@ -169,10 +200,54 @@ export class GameEngine {
     this.scene.add(grid);
   }
 
+  // ==================== CONTACT SHADOW ====================
+  private setupContactShadow() {
+    const geo = new THREE.PlaneGeometry(3, 3);
+    this.contactShadowMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uShadowPos: { value: new THREE.Vector3(0, 0.01, 0) },
+        uShadowScale: { value: 1.0 },
+        uHeight: { value: 0.0 },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 uShadowPos;
+        uniform float uShadowScale;
+        uniform float uHeight;
+        varying vec2 vUv;
+        void main() {
+          vec2 centered = vUv - 0.5;
+          float dist = length(centered);
+          // Soft elliptical shadow
+          float shadow = smoothstep(0.5 * uShadowScale, 0.1 * uShadowScale, dist);
+          // Height-based fade (shadow shrinks/fades when jumping)
+          float heightFade = 1.0 - clamp(uHeight / 2.0, 0.0, 0.85);
+          shadow *= heightFade;
+          // Walking pulse — shadow slightly stretches when moving
+          shadow *= 0.55;
+          gl_FragColor = vec4(0.0, 0.0, 0.0, shadow);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.contactShadow = new THREE.Mesh(geo, this.contactShadowMat);
+    this.contactShadow.rotation.x = -Math.PI / 2;
+    this.contactShadow.position.y = 0.01;
+    this.contactShadow.renderOrder = -1;
+    this.scene.add(this.contactShadow);
+  }
+
   // ==================== PLACEHOLDER (before model loads) ====================
   private placeholderMeshes: THREE.Mesh[] = [];
   private setupPlaceholderChar() {
-    // Simple capsule placeholder
     const mat = new THREE.MeshStandardMaterial({ color: 0x22aa66, roughness: 0.5, metalness: 0.3, transparent: true, opacity: 0.7 });
     const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.4, 1.2, 8, 16), mat);
     body.position.y = 1.0; body.castShadow = true;
@@ -194,7 +269,7 @@ export class GameEngine {
     this.placeholderMeshes = [];
   }
 
-  // ==================== LOAD GLB 3D MODEL ====================
+  // ==================== LOAD GLB 3D MODEL (Player) ====================
   private loadGLBModel() {
     const dracoLoader = new DRACOLoader();
     dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
@@ -205,23 +280,19 @@ export class GameEngine {
     gltfLoader.load(
       '/character.glb',
       (gltf) => {
-        console.log('GLB loaded:', gltf.scene, 'animations:', gltf.animations.length);
-
+        console.log('Player GLB loaded, animations:', gltf.animations.length);
         const model = gltf.scene;
 
         // Auto-scale: fit model into ~2m height
         const box = new THREE.Box3().setFromObject(model);
         const size = box.getSize(new THREE.Vector3());
         const maxDim = Math.max(size.x, size.y, size.z);
-        if (maxDim > 0) {
-          this.charScale = 2.0 / maxDim;
-        }
+        if (maxDim > 0) this.charScale = 2.0 / maxDim;
         model.scale.setScalar(this.charScale);
 
-        // Center model on ground
+        // Center on ground
         box.setFromObject(model);
-        const bottom = box.min.y;
-        model.position.y = -bottom;
+        model.position.y = -box.min.y;
 
         // Enable shadows on all meshes
         model.traverse((child) => {
@@ -231,24 +302,20 @@ export class GameEngine {
           }
         });
 
-        // Remove placeholder
-        this.removePlaceholder();
+        // Find arm/leg bones for procedural animation
+        this.findBones(model);
 
-        // Add model to character group
+        this.removePlaceholder();
         this.charGroup.add(model);
         this.charModel = model;
         this.modelLoaded = true;
 
-        // Setup animations if available
+        // Setup animations
         if (gltf.animations.length > 0) {
           this.charMixer = new THREE.AnimationMixer(model);
-
-          // Categorize animations by name heuristics
           let idleAnim: THREE.AnimationClip | null = null;
           let walkAnim: THREE.AnimationClip | null = null;
           let walkBackAnim: THREE.AnimationClip | null = null;
-          let shootAnim: THREE.AnimationClip | null = null;
-          let runAnim: THREE.AnimationClip | null = null;
 
           for (const anim of gltf.animations) {
             const name = anim.name.toLowerCase();
@@ -258,44 +325,154 @@ export class GameEngine {
               if (!walkAnim) walkAnim = anim;
             } else if (name.includes('backward') || name.includes('back') || name.includes('retreat')) {
               if (!walkBackAnim) walkBackAnim = anim;
-            } else if (name.includes('shoot') || name.includes('fire') || name.includes('attack') || name.includes('punch')) {
-              if (!shootAnim) shootAnim = anim;
-            } else if (name.includes('run')) {
-              if (!runAnim) runAnim = anim;
             }
           }
 
-          // Fallback: if no specific anims found, use first animations
           if (!idleAnim && gltf.animations.length > 0) idleAnim = gltf.animations[0];
           if (!walkAnim && gltf.animations.length > 1) walkAnim = gltf.animations[1];
-          if (!shootAnim && gltf.animations.length > 2) shootAnim = gltf.animations[2];
-          if (walkAnim) walkAnim = walkAnim || idleAnim;
-          if (!walkBackAnim) walkBackAnim = walkAnim; // Use walk as fallback
+          if (!walkBackAnim) walkBackAnim = walkAnim;
 
           if (idleAnim) this.charAnims['idle'] = this.charMixer.clipAction(idleAnim);
           if (walkAnim) this.charAnims['walking_forward'] = this.charMixer.clipAction(walkAnim);
           if (walkBackAnim && walkBackAnim !== walkAnim) this.charAnims['walking_backward'] = this.charMixer.clipAction(walkBackAnim);
           else if (walkAnim) this.charAnims['walking_backward'] = this.charMixer.clipAction(walkAnim);
-          if (shootAnim) this.charAnims['shooting'] = this.charMixer.clipAction(shootAnim);
-          if (runAnim) this.charAnims['run'] = this.charMixer.clipAction(runAnim);
 
-          // Play idle by default
           this.playAnim('idle');
-
-          console.log('Available anims:', Object.keys(this.charAnims));
         }
 
         this.checkReady();
       },
-      (progress) => {
-        if (progress.total > 0) {
-          const pct = Math.round((progress.loaded / progress.total) * 100);
-          console.log('GLB load:', pct + '%');
-        }
-      },
+      undefined,
       (err) => {
-        console.error('GLB load error:', err);
-        this.checkReady(); // Continue even if model fails
+        console.error('Player GLB load error:', err);
+        this.checkReady();
+      }
+    );
+  }
+
+  // ==================== FIND BONES FOR PROCEDURAL ANIMATION ====================
+  private findBones(model: THREE.Object3D) {
+    model.traverse((child) => {
+      if (!(child instanceof THREE.Bone)) return;
+      const n = child.name.toLowerCase();
+      // Arms
+      if ((n.includes('upperarm') || n.includes('arm_upper') || n.includes('shoulder')) && n.includes('left') && !this.leftArm) {
+        this.leftArm = child;
+      } else if ((n.includes('upperarm') || n.includes('arm_upper') || n.includes('shoulder')) && (n.includes('right') || n.includes('_r')) && !this.rightArm) {
+        this.rightArm = child;
+      }
+      if ((n.includes('lowerarm') || n.includes('forearm') || n.includes('arm_lower')) && n.includes('left') && !this.leftForearm) {
+        this.leftForearm = child;
+      } else if ((n.includes('lowerarm') || n.includes('forearm') || n.includes('arm_lower')) && (n.includes('right') || n.includes('_r')) && !this.rightForearm) {
+        this.rightForearm = child;
+      }
+      // Legs
+      if ((n.includes('upperleg') || n.includes('thigh') || n.includes('leg_upper')) && n.includes('left') && !this.leftLeg) {
+        this.leftLeg = child;
+      } else if ((n.includes('upperleg') || n.includes('thigh') || n.includes('leg_upper')) && (n.includes('right') || n.includes('_r')) && !this.rightLeg) {
+        this.rightLeg = child;
+      }
+      if ((n.includes('lowerleg') || n.includes('calf') || n.includes('shin') || n.includes('leg_lower')) && n.includes('left') && !this.leftCalf) {
+        this.leftCalf = child;
+      } else if ((n.includes('lowerleg') || n.includes('calf') || n.includes('shin') || n.includes('leg_lower')) && (n.includes('right') || n.includes('_r')) && !this.rightCalf) {
+        this.rightCalf = child;
+      }
+    });
+    console.log('Bones found:', {
+      leftArm: this.leftArm?.name, rightArm: this.rightArm?.name,
+      leftForearm: this.leftForearm?.name, rightForearm: this.rightForearm?.name,
+      leftLeg: this.leftLeg?.name, rightLeg: this.rightLeg?.name,
+      leftCalf: this.leftCalf?.name, rightCalf: this.rightCalf?.name,
+    });
+  }
+
+  // ==================== PROCEDURAL ARM/LEG ANIMATION ====================
+  private applyProceduralAnimation(speed: number) {
+    if (speed <= 0) return;
+    const swing = 0.6; // Max swing angle
+    const forearmSwing = 0.4;
+    const legSwing = 0.5;
+    const calfSwing = 0.7;
+
+    const phase = this.walkTime;
+
+    // Left arm swings forward when right leg goes forward (natural cross-pattern)
+    if (this.leftArm) this.leftArm.rotation.x = Math.sin(phase) * swing;
+    if (this.rightArm) this.rightArm.rotation.x = Math.sin(phase + Math.PI) * swing;
+    if (this.leftForearm) this.leftForearm.rotation.x = -Math.abs(Math.sin(phase)) * forearmSwing - 0.2;
+    if (this.rightForearm) this.rightForearm.rotation.x = -Math.abs(Math.sin(phase + Math.PI)) * forearmSwing - 0.2;
+
+    // Legs
+    if (this.leftLeg) this.leftLeg.rotation.x = Math.sin(phase + Math.PI) * legSwing;
+    if (this.rightLeg) this.rightLeg.rotation.x = Math.sin(phase) * legSwing;
+    if (this.leftCalf) this.leftCalf.rotation.x = Math.max(0, Math.sin(phase + Math.PI + 0.5)) * calfSwing;
+    if (this.rightCalf) this.rightCalf.rotation.x = Math.max(0, Math.sin(phase + 0.5)) * calfSwing;
+  }
+
+  private resetProceduralAnimation() {
+    const lerp = 0.1;
+    [this.leftArm, this.rightArm, this.leftForearm, this.rightForearm,
+     this.leftLeg, this.rightLeg, this.leftCalf, this.rightCalf].forEach(bone => {
+      if (bone) bone.rotation.x *= (1 - lerp);
+    });
+  }
+
+  // ==================== LOAD NPC MODEL ====================
+  private loadNPCModel() {
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+
+    const gltfLoader = new GLTFLoader();
+    gltfLoader.setDRACOLoader(dracoLoader);
+
+    gltfLoader.load(
+      '/npc.glb',
+      (gltf) => {
+        console.log('NPC GLB loaded');
+        const sourceModel = gltf.scene;
+
+        // Auto-scale NPC to ~2m
+        const box = new THREE.Box3().setFromObject(sourceModel);
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const npcScale = maxDim > 0 ? 2.0 / maxDim : 1.0;
+
+        // 5 NPC positions spread around the scene
+        const positions = [
+          { x: 8, z: -5, ry: 0.5 },
+          { x: -6, z: -10, ry: 2.0 },
+          { x: 4, z: -18, ry: 3.5 },
+          { x: -10, z: -22, ry: 1.2 },
+          { x: 14, z: -15, ry: 4.8 },
+        ];
+
+        positions.forEach((pos, i) => {
+          const npc = sourceModel.clone();
+          npc.scale.setScalar(npcScale);
+
+          // Re-center on ground
+          const b = new THREE.Box3().setFromObject(npc);
+          npc.position.y = -b.min.y;
+
+          npc.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+            }
+          });
+
+          npc.position.set(pos.x, 0, pos.z);
+          npc.rotation.y = pos.ry;
+          this.scene.add(npc);
+          this.npcModels.push(npc);
+        });
+
+        this.checkReady();
+      },
+      undefined,
+      (err) => {
+        console.error('NPC GLB load error:', err);
+        this.checkReady();
       }
     );
   }
@@ -305,10 +482,7 @@ export class GameEngine {
     const action = this.charAnims[state];
     if (!action) return;
     if (this.charCurrentAction === action) return;
-
-    if (this.charCurrentAction) {
-      this.charCurrentAction.fadeOut(0.2);
-    }
+    if (this.charCurrentAction) this.charCurrentAction.fadeOut(0.2);
     action.reset().fadeIn(0.2).play();
     this.charCurrentAction = action;
   }
@@ -320,8 +494,11 @@ export class GameEngine {
     const sizes = new Float32Array(N);
     const alphas = new Float32Array(N);
     for (let i = 0; i < N; i++) {
-      pos[i*3]=(Math.random()-0.5)*120; pos[i*3+1]=Math.random()*20+0.3; pos[i*3+2]=(Math.random()-0.5)*120;
-      sizes[i]=Math.random()*3.5+0.5; alphas[i]=Math.random();
+      pos[i * 3] = (Math.random() - 0.5) * 120;
+      pos[i * 3 + 1] = Math.random() * 20 + 0.3;
+      pos[i * 3 + 2] = (Math.random() - 0.5) * 120;
+      sizes[i] = Math.random() * 3.5 + 0.5;
+      alphas[i] = Math.random();
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -360,50 +537,46 @@ export class GameEngine {
   // ==================== ENVIRONMENT ====================
   private setupEnvironment() {
     const orbData = [
-      {x:8,y:3,z:-10,c:0x2266ff},{x:-10,y:4,z:-7,c:0xff4422},
-      {x:5,y:2,z:-18,c:0x22ff88},{x:-6,y:5,z:-20,c:0x8844ff},
-      {x:12,y:3,z:-25,c:0xffaa22},{x:-14,y:2,z:-15,c:0x44ddff},
-      {x:0,y:6,z:-30,c:0xff2288},{x:-20,y:3,z:-25,c:0x22ffcc},
+      { x: 8, y: 3, z: -10, c: 0x2266ff }, { x: -10, y: 4, z: -7, c: 0xff4422 },
+      { x: 5, y: 2, z: -18, c: 0x22ff88 }, { x: -6, y: 5, z: -20, c: 0x8844ff },
+      { x: 12, y: 3, z: -25, c: 0xffaa22 }, { x: -14, y: 2, z: -15, c: 0x44ddff },
+      { x: 0, y: 6, z: -30, c: 0xff2288 }, { x: -20, y: 3, z: -25, c: 0x22ffcc },
     ];
-    orbData.forEach(({x,y,z,c})=>{
-      const m=new THREE.Mesh(new THREE.SphereGeometry(0.2,12,12),new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:0.7}));
-      m.position.set(x,y,z); this.scene.add(m);
-      const l=new THREE.PointLight(c,3,12); l.position.set(x,y,z); this.scene.add(l);
-      const h=new THREE.Mesh(new THREE.SphereGeometry(0.6,8,8),new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:0.08,side:THREE.BackSide}));
-      h.position.set(x,y,z); this.scene.add(h);
+    orbData.forEach(({ x, y, z, c }) => {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 12), new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.7 }));
+      m.position.set(x, y, z); this.scene.add(m);
+      const l = new THREE.PointLight(c, 3, 12); l.position.set(x, y, z); this.scene.add(l);
+      const h = new THREE.Mesh(new THREE.SphereGeometry(0.6, 8, 8), new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.08, side: THREE.BackSide }));
+      h.position.set(x, y, z); this.scene.add(h);
       this.orbs.push(m);
     });
 
-    const pp=[
-      {x:10,z:-8},{x:-10,z:-8},{x:8,z:-20},{x:-8,z:-20},
-      {x:15,z:-15},{x:-15,z:-15},{x:0,z:-30},{x:12,z:-35},{x:-12,z:-35},
-      {x:20,z:-25},{x:-20,z:-25},
+    const pp = [
+      { x: 10, z: -8 }, { x: -10, z: -8 }, { x: 8, z: -20 }, { x: -8, z: -20 },
+      { x: 15, z: -15 }, { x: -15, z: -15 }, { x: 0, z: -30 }, { x: 12, z: -35 }, { x: -12, z: -35 },
+      { x: 20, z: -25 }, { x: -20, z: -25 },
     ];
-    pp.forEach(({x,z})=>{
-      const p=new THREE.Mesh(new THREE.CylinderGeometry(0.4,0.6,6,8),new THREE.MeshStandardMaterial({color:0x1a2a3a,metalness:0.85,roughness:0.25}));
-      p.position.set(x,3,z); p.castShadow=true; p.receiveShadow=true; this.scene.add(p);
-      const t=new THREE.Mesh(new THREE.SphereGeometry(0.15,8,8),new THREE.MeshBasicMaterial({color:0x4488ff,transparent:true,opacity:0.8}));
-      t.position.set(x,6.15,z); this.scene.add(t);
-      const pl=new THREE.PointLight(0x4488ff,2,10); pl.position.set(x,6.15,z); this.scene.add(pl);
+    pp.forEach(({ x, z }) => {
+      const p = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.4, 0.6, 6, 8),
+        new THREE.MeshStandardMaterial({ color: 0x1a2a3a, metalness: 0.85, roughness: 0.25 })
+      );
+      p.position.set(x, 3, z); p.castShadow = true; p.receiveShadow = true; this.scene.add(p);
+      const t = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 8), new THREE.MeshBasicMaterial({ color: 0x4488ff, transparent: true, opacity: 0.8 }));
+      t.position.set(x, 6.15, z); this.scene.add(t);
+      const pl = new THREE.PointLight(0x4488ff, 2, 10); pl.position.set(x, 6.15, z); this.scene.add(pl);
     });
 
-    for(let i=0;i<40;i++){
-      const w=Math.random()*5+1,h=Math.random()*10+3,d=Math.random()*5+1;
-      const b=new THREE.Mesh(
-        new THREE.BoxGeometry(w,h,d),
-        new THREE.MeshStandardMaterial({color:new THREE.Color().setHSL(0.55+Math.random()*0.1,0.3,0.05+Math.random()*0.04),metalness:0.7,roughness:0.4})
+    for (let i = 0; i < 40; i++) {
+      const w = Math.random() * 5 + 1, h = Math.random() * 10 + 3, d = Math.random() * 5 + 1;
+      const b = new THREE.Mesh(
+        new THREE.BoxGeometry(w, h, d),
+        new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(0.55 + Math.random() * 0.1, 0.3, 0.05 + Math.random() * 0.04), metalness: 0.7, roughness: 0.4 })
       );
-      const a=Math.random()*Math.PI*2,r=25+Math.random()*50;
-      b.position.set(Math.cos(a)*r,h/2,Math.sin(a)*r);
-      b.castShadow=true; this.scene.add(b);
+      const a = Math.random() * Math.PI * 2, r = 25 + Math.random() * 50;
+      b.position.set(Math.cos(a) * r, h / 2, Math.sin(a) * r);
+      b.castShadow = true; this.scene.add(b);
     }
-  }
-
-  // ==================== MUZZLE FLASH ====================
-  private setupMuzzleFlash() {
-    this.muzzleLight = new THREE.PointLight(0xffaa44, 0, 10);
-    this.muzzleLight.position.set(0, 2.0, -0.5);
-    this.charGroup.add(this.muzzleLight);
   }
 
   // ==================== POST PROCESSING ====================
@@ -451,62 +624,63 @@ export class GameEngine {
 
   private checkReady() {
     this.loadCount++;
-    if (this.loadCount >= 2 && !this.ready) { this.ready = true; this.onReady?.(); }
+    if (this.loadCount >= this.totalLoads && !this.ready) { this.ready = true; this.onReady?.(); }
   }
 
   // ==================== PUBLIC API ====================
   setOnReady(cb: () => void) { this.onReady = cb; }
   setOnStateChange(cb: (s: CharacterState) => void) { this.onState = cb; }
-  setOnModelLoadProgress(cb: (pct: number) => void) { this.onModelLoadProgress = cb; }
   updateInput(p: Partial<InputState>) { Object.assign(this.input, p); }
-
-  triggerShoot() {
-    if (this.charState === 'shooting') return;
-    this.charState = 'shooting';
-    this.shootTimer = 0.3;
-    this.muzzleLight.intensity = 25;
-    this.playAnim('shooting');
-    this.onState?.('shooting');
-
-    // Shoot ring FX
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(0.1, 0.3, 32),
-      new THREE.MeshBasicMaterial({ color: 0xffcc44, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false })
-    );
-    const fwd = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0,1,0), this.charRotation);
-    ring.position.copy(this.charWorldPos).add(fwd.multiplyScalar(1.5)).add(new THREE.Vector3(0, 1.5, 0));
-    ring.lookAt(ring.position.clone().add(fwd));
-    this.scene.add(ring);
-    this.shootRings.push(ring);
-
-    setTimeout(() => {
-      if (this.charState === 'shooting') {
-        this.charState = 'idle'; this.playAnim('idle'); this.onState?.('idle');
-      }
-    }, 350);
-  }
 
   // ==================== CAMERA ====================
   private updateCamera() {
     const targetPos = new THREE.Vector3(
       this.charWorldPos.x + Math.sin(this.yaw) * this.camDist,
-      this.charWorldPos.y + this.camHeight - this.pitch * 3,
+      this.charWorldPos.y + this.camHeight - this.pitch * 2,
       this.charWorldPos.z + Math.cos(this.yaw) * this.camDist,
     );
     const targetLook = this.charWorldPos.clone().add(new THREE.Vector3(0, 1.2, 0));
-
-    this.camSmoothPos.lerp(targetPos, 0.06);
-    this.camSmoothLook.lerp(targetLook, 0.08);
-
+    this.camSmoothPos.lerp(targetPos, 0.08);
+    this.camSmoothLook.lerp(targetLook, 0.1);
     this.camera.position.copy(this.camSmoothPos);
     this.camera.lookAt(this.camSmoothLook);
   }
 
+  // ==================== JUMP PHYSICS ====================
+  private updateJump(dt: number) {
+    if (this.input.space && this.isGrounded) {
+      this.velocityY = this.config.jumpForce;
+      this.isGrounded = false;
+      if (this.charState !== 'walking_forward' && this.charState !== 'walking_backward') {
+        this.charState = 'jumping';
+        this.onState?.('jumping');
+      }
+    }
+
+    if (!this.isGrounded) {
+      this.velocityY -= this.config.gravity;
+      this.charWorldPos.y += this.velocityY;
+
+      if (this.charWorldPos.y <= 0) {
+        this.charWorldPos.y = 0;
+        this.velocityY = 0;
+        this.isGrounded = true;
+        // Return to previous state
+        const moving = this.input.w || this.input.a || this.input.s || this.input.d;
+        if (!moving) {
+          this.charState = 'idle';
+          this.playAnim('idle');
+          this.onState?.('idle');
+        }
+      }
+    }
+  }
+
   // ==================== MOVEMENT ====================
   private updateMovement(dt: number) {
-    const camFwd = new THREE.Vector3(0,0,-1).applyAxisAngle(new THREE.Vector3(0,1,0), this.yaw);
+    const camFwd = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
     camFwd.y = 0; camFwd.normalize();
-    const camRight = new THREE.Vector3(1,0,0).applyAxisAngle(new THREE.Vector3(0,1,0), this.yaw);
+    const camRight = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
     camRight.y = 0; camRight.normalize();
 
     const dir = new THREE.Vector3();
@@ -516,9 +690,10 @@ export class GameEngine {
     if (this.input.a) dir.sub(camRight);
     const moving = dir.lengthSq() > 0;
 
-    if (moving && this.charState !== 'shooting') {
+    if (moving && this.isGrounded) {
       dir.normalize().multiplyScalar(this.config.moveSpeed);
-      this.charWorldPos.add(dir);
+      this.charWorldPos.x += dir.x;
+      this.charWorldPos.z += dir.z;
 
       const targetRot = Math.atan2(dir.x, dir.z);
       this.charRotation += shortAngleDist(this.charRotation, targetRot) * 0.15;
@@ -533,7 +708,7 @@ export class GameEngine {
         this.charState = 'walking_forward'; this.playAnim('walking_forward'); this.onState?.('walking_forward');
       }
       this.walkTime += dt * this.config.walkBounceSpeed;
-    } else if (!moving && this.charState !== 'shooting') {
+    } else if (!moving && this.isGrounded) {
       if (this.charState !== 'idle') { this.charState = 'idle'; this.playAnim('idle'); this.onState?.('idle'); }
       this.walkTime *= 0.9;
     }
@@ -544,8 +719,52 @@ export class GameEngine {
 
     // If no animations, do manual bounce for placeholder
     if (!this.modelLoaded || !this.charMixer) {
-      const bounce = moving ? Math.abs(Math.sin(this.walkTime)) * this.config.walkBounceHeight * 0.3 : 0;
-      this.placeholderMeshes.forEach(m => { m.position.y = (m === this.placeholderMeshes[0] ? 1.0 : 1.95) + bounce; });
+      const bounce = moving && this.isGrounded ? Math.abs(Math.sin(this.walkTime)) * this.config.walkBounceHeight * 0.3 : 0;
+      this.placeholderMeshes.forEach(m => {
+        m.position.y = (m === this.placeholderMeshes[0] ? 1.0 : 1.95) + bounce;
+      });
+    }
+
+    // Procedural arm/leg swing
+    if (this.modelLoaded && moving && this.isGrounded) {
+      this.applyProceduralAnimation(this.config.moveSpeed);
+    } else if (this.modelLoaded) {
+      this.resetProceduralAnimation();
+    }
+  }
+
+  // ==================== CONTACT SHADOW UPDATE ====================
+  private updateContactShadow() {
+    this.contactShadow.position.x = this.charWorldPos.x;
+    this.contactShadow.position.z = this.charWorldPos.z;
+    this.contactShadow.rotation.z = this.charRotation;
+
+    const height = this.charWorldPos.y;
+    const moving = this.input.w || this.input.a || this.input.s || this.input.d;
+    const walkPulse = moving && this.isGrounded ? 1.0 + Math.sin(this.walkTime * 2) * 0.08 : 1.0;
+
+    this.contactShadowMat.uniforms.uShadowPos.value.set(this.charWorldPos.x, 0.01, this.charWorldPos.z);
+    this.contactShadowMat.uniforms.uShadowScale.value = walkPulse;
+    this.contactShadowMat.uniforms.uHeight.value = height;
+  }
+
+  // ==================== DYNAMIC SHADOW LIGHT FOLLOW ====================
+  private updateShadowLight() {
+    // Main directional light follows player for better shadow quality
+    this.dirLight.position.set(
+      this.charWorldPos.x + 8,
+      18,
+      this.charWorldPos.z + 8
+    );
+    this.dirLight.target.position.copy(this.charWorldPos);
+    this.dirLight.target.updateMatrixWorld();
+
+    // Spotlight follows player
+    const spot = this.scene.children.find(c => c instanceof THREE.SpotLight) as THREE.SpotLight | undefined;
+    if (spot) {
+      spot.position.set(this.charWorldPos.x, 12, this.charWorldPos.z);
+      spot.target.position.copy(this.charWorldPos);
+      spot.target.updateMatrixWorld();
     }
   }
 
@@ -567,20 +786,6 @@ export class GameEngine {
     this.postMat.uniforms.uVignette.value = 1.3 + this.turnBlur * 0.3;
   }
 
-  // ==================== SHOOT FX ====================
-  private updateShootFX(dt: number) {
-    if (this.muzzleLight.intensity > 0) this.muzzleLight.intensity *= 0.85;
-    for (let i = this.shootRings.length - 1; i >= 0; i--) {
-      const ring = this.shootRings[i];
-      ring.scale.multiplyScalar(1.1);
-      (ring.material as THREE.MeshBasicMaterial).opacity *= 0.88;
-      if ((ring.material as THREE.MeshBasicMaterial).opacity < 0.01) {
-        this.scene.remove(ring); ring.geometry.dispose(); (ring.material as THREE.Material).dispose();
-        this.shootRings.splice(i, 1);
-      }
-    }
-  }
-
   // ==================== MAIN LOOP ====================
   private animate = () => {
     if (!this.isRunning) return;
@@ -588,22 +793,20 @@ export class GameEngine {
     const dt = Math.min(this.clock.getDelta(), 0.05);
     this.t += dt;
 
+    this.updateJump(dt);
     this.updateMovement(dt);
     this.updateLook();
     this.updateCamera();
-    this.updateShootFX(dt);
+    this.updateContactShadow();
+    this.updateShadowLight();
 
     // Update animation mixer
     if (this.charMixer) this.charMixer.update(dt);
 
-    // Spotlight follows character
-    const spot = this.scene.children.find(c => c instanceof THREE.SpotLight) as THREE.SpotLight | undefined;
-    if (spot) { spot.position.set(this.charWorldPos.x, 10, this.charWorldPos.z); spot.target.position.copy(this.charWorldPos); }
-
     this.ptsMat.uniforms.uTime.value = this.t;
     this.orbs.forEach((o, i) => {
-      o.position.y += Math.sin(this.t*0.4+i*1.7)*0.004;
-      (o.material as THREE.MeshBasicMaterial).opacity = 0.5+Math.sin(this.t*0.7+i*2.3)*0.2;
+      o.position.y += Math.sin(this.t * 0.4 + i * 1.7) * 0.004;
+      (o.material as THREE.MeshBasicMaterial).opacity = 0.5 + Math.sin(this.t * 0.7 + i * 2.3) * 0.2;
     });
     this.postMat.uniforms.uTime.value = this.t;
 
@@ -629,8 +832,13 @@ export class GameEngine {
   }
 
   dispose() {
-    this.stop(); this.renderer.dispose(); this.rt.dispose();
-    this.groundMat.dispose(); this.ptsMat.dispose(); this.postMat.dispose();
+    this.stop();
+    this.renderer.dispose();
+    this.rt.dispose();
+    this.groundMat.dispose();
+    this.ptsMat.dispose();
+    this.postMat.dispose();
+    this.contactShadowMat.dispose();
   }
 
   getIsReady() { return this.ready; }

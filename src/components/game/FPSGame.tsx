@@ -8,7 +8,6 @@ export default function FPSGame() {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<GameEngine | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
-  const [modelLoaded, setModelLoaded] = useState(false);
   const [charState, setCharState] = useState<CharacterState>('idle');
   const [showOverlay, setShowOverlay] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
@@ -34,26 +33,27 @@ export default function FPSGame() {
 
     engine.setOnStateChange((state) => setCharState(state));
     engine.setOnReady(() => setIsLoaded(true));
-    engine.setOnModelLoadProgress(() => setModelLoaded(true));
 
     engine.start();
 
     // Keyboard state tracker
-    const keyState = { w: false, a: false, s: false, d: false };
+    const keyState = { w: false, a: false, s: false, d: false, space: false };
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
       if (key in keyState) {
-        keyState[key as keyof typeof keyState] = true;
-        engine.updateInput(keyState);
+        (keyState as Record<string, boolean>)[key] = true;
+        engine.updateInput(keyState as Partial<typeof keyState>);
       }
+      // Prevent page scroll on space
+      if (key === ' ') e.preventDefault();
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
       if (key in keyState) {
-        keyState[key as keyof typeof keyState] = false;
-        engine.updateInput(keyState);
+        (keyState as Record<string, boolean>)[key] = false;
+        engine.updateInput(keyState as Partial<typeof keyState>);
       }
     };
 
@@ -68,14 +68,12 @@ export default function FPSGame() {
       }
     };
 
-    // Click to lock pointer and shoot
-    const handleClick = (e: MouseEvent) => {
+    // Click to lock pointer
+    const handleClick = () => {
       const canvas = containerRef.current?.querySelector('canvas');
       if (canvas && document.pointerLockElement !== canvas) {
         canvas.requestPointerLock();
         setShowOverlay(false);
-      } else {
-        engine.triggerShoot();
       }
     };
 
@@ -90,7 +88,6 @@ export default function FPSGame() {
     const handleTouchStart = (e: TouchEvent) => {
       if (e.touches.length === 1) {
         const touch = e.touches[0];
-        // Right half of screen = look, left half = move forward
         if (touch.clientX > window.innerWidth / 2) {
           touchState.active = true;
           touchState.startX = touch.clientX;
@@ -98,11 +95,15 @@ export default function FPSGame() {
           touchState.deltaX = 0;
           touchState.deltaY = 0;
         } else {
-          // Left side tap = move forward
-          engine.updateInput({ ...keyState, w: true });
+          engine.updateInput({ ...keyState, w: true } as Partial<typeof keyState>);
           keyState.w = true;
         }
         setShowOverlay(false);
+      }
+      // Double touch = jump
+      if (e.touches.length === 2) {
+        engine.updateInput({ space: true });
+        setTimeout(() => engine.updateInput({ space: false }), 100);
       }
     };
 
@@ -122,10 +123,6 @@ export default function FPSGame() {
 
     const handleTouchEnd = (e: TouchEvent) => {
       if (touchState.active) {
-        // If it was a quick tap (small movement), trigger shoot
-        if (Math.abs(touchState.deltaX) < 10 && Math.abs(touchState.deltaY) < 10) {
-          engine.triggerShoot();
-        }
         touchState.active = false;
         engine.updateInput({
           touchStartX: null,
@@ -134,9 +131,8 @@ export default function FPSGame() {
           touchDeltaY: 0,
         });
       } else {
-        // Release forward movement
         keyState.w = false;
-        engine.updateInput(keyState);
+        engine.updateInput(keyState as Partial<typeof keyState>);
       }
     };
 
@@ -173,16 +169,16 @@ export default function FPSGame() {
 
   const stateLabel: Record<CharacterState, string> = {
     idle: 'HAZIR',
-    walking_forward: 'İLERİ YÜRÜYOR',
+    walking_forward: 'YÜRÜYOR',
     walking_backward: 'GERİ GİDİYOR',
-    shooting: 'ATEŞ EDİYOR',
+    jumping: 'ZIPLIYOR',
   };
 
   const stateColor: Record<CharacterState, string> = {
     idle: 'from-emerald-500/20 to-cyan-500/20 text-emerald-400',
     walking_forward: 'from-blue-500/20 to-cyan-500/20 text-blue-400',
     walking_backward: 'from-amber-500/20 to-orange-500/20 text-amber-400',
-    shooting: 'from-red-500/30 to-yellow-500/20 text-red-400',
+    jumping: 'from-purple-500/20 to-pink-500/20 text-purple-400',
   };
 
   return (
@@ -201,10 +197,10 @@ export default function FPSGame() {
             YÜKLENIYOR
           </h2>
           <p className="text-slate-500 text-sm font-mono">
-            3D Model & Zemin Yükleniyor...
+            3D Modeller Yükleniyor...
           </p>
           <p className="text-slate-600 text-xs font-mono mt-2">
-            Sıkıştırılmış ~5MB model — hızlı yükleme
+            Oyuncu + 5 NPC (~10MB toplam)
           </p>
           <div className="mt-6 w-48 h-0.5 bg-slate-800 rounded overflow-hidden">
             <div className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded animate-pulse" style={{ width: '60%' }} />
@@ -227,11 +223,11 @@ export default function FPSGame() {
           <div className="text-center">
             <div className="mb-6">
               <h1 className="text-5xl font-bold bg-gradient-to-b from-white to-slate-400 bg-clip-text text-transparent tracking-tight">
-                FPS ARENA
+                3D DÜNYA
               </h1>
               <div className="mt-2 h-px w-48 mx-auto bg-gradient-to-r from-transparent via-cyan-500/50 to-transparent" />
               <p className="mt-3 text-slate-400 text-sm font-mono tracking-widest uppercase">
-                Gerçek Zamanlı 3D Deneyim
+                Keşfet & Keşfedil
               </p>
             </div>
 
@@ -246,8 +242,8 @@ export default function FPSGame() {
                   <span>Bakış Yönü</span>
                 </div>
                 <div className="flex items-center gap-3 justify-center">
-                  <kbd className="px-2 py-1 bg-slate-800 rounded border border-slate-600 text-xs">TIKLAMA</kbd>
-                  <span>Ateş</span>
+                  <kbd className="px-2 py-1 bg-slate-800 rounded border border-slate-600 text-xs">SPACE</kbd>
+                  <span>Zıpla</span>
                 </div>
               </div>
             ) : (
@@ -257,12 +253,12 @@ export default function FPSGame() {
                   <span>İleri Yürü</span>
                 </div>
                 <div className="flex items-center gap-3 justify-center">
-                  <span className="px-3 py-1 bg-slate-800 rounded border border-slate-600">Sağ Taraf Sürükle</span>
+                  <span className="px-3 py-1 bg-slate-800 rounded border border-slate-600">Sağ Sürükle</span>
                   <span>Bakış Yönü</span>
                 </div>
                 <div className="flex items-center gap-3 justify-center">
-                  <span className="px-3 py-1 bg-slate-800 rounded border border-slate-600">Hızlı Dokunma</span>
-                  <span>Ateş</span>
+                  <span className="px-3 py-1 bg-slate-800 rounded border border-slate-600">Çift Dokunma</span>
+                  <span>Zıpla</span>
                 </div>
               </div>
             )}
@@ -276,7 +272,7 @@ export default function FPSGame() {
         </div>
       )}
 
-      {/* HUD - Top Left */}
+      {/* HUD */}
       {isLoaded && !showOverlay && (
         <>
           {/* Crosshair */}
@@ -292,8 +288,7 @@ export default function FPSGame() {
 
           {/* State Indicator - Top Left */}
           <div className="absolute top-4 left-4 z-30 pointer-events-none">
-            <div className={`px-4 py-2 rounded-lg bg-gradient-to-r ${stateColor[charState]} border border-white/10 backdrop-blur-md`}
-            >
+            <div className={`px-4 py-2 rounded-lg bg-gradient-to-r ${stateColor[charState]} border border-white/10 backdrop-blur-md`}>
               <div className="text-[10px] uppercase tracking-[0.2em] opacity-60 mb-0.5">Durum</div>
               <div className="font-mono font-bold text-sm tracking-wider">{stateLabel[charState]}</div>
             </div>
@@ -312,9 +307,9 @@ export default function FPSGame() {
             <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 pointer-events-none animate-fade-out">
               <div className="px-5 py-3 rounded-xl bg-black/50 border border-white/10 backdrop-blur-md">
                 <p className="text-slate-400 text-xs font-mono text-center">
-                  <span className="text-cyan-400">ESC</span> ile serbest bırak &middot; 
-                  <span className="text-cyan-400">WASD</span> ile hareket et &middot; 
-                  <span className="text-cyan-400">TIKLA</span> ile ateş et
+                  <span className="text-cyan-400">ESC</span> serbest bırak &middot;
+                  <span className="text-cyan-400">WASD</span> hareket &middot;
+                  <span className="text-cyan-400">SPACE</span> zıpla
                 </p>
               </div>
             </div>
@@ -323,13 +318,11 @@ export default function FPSGame() {
           {/* Mobile Touch Controls */}
           {isMobile && !showOverlay && (
             <>
-              {/* Move Forward Zone - Left */}
               <div className="absolute left-0 bottom-0 w-1/2 h-1/3 z-20 flex items-end justify-center pb-8 pointer-events-none">
                 <div className="text-slate-500/40 font-mono text-xs tracking-widest">
                   ↑ İLERİ
                 </div>
               </div>
-              {/* Look Zone - Right */}
               <div className="absolute right-0 bottom-0 w-1/2 h-1/3 z-20 flex items-end justify-center pb-8 pointer-events-none">
                 <div className="text-slate-500/40 font-mono text-xs tracking-widest">
                   ↻ BAKIŞ
@@ -338,12 +331,12 @@ export default function FPSGame() {
             </>
           )}
 
-          {/* Bottom Left - Studio Credit */}
+          {/* Bottom Left - Credit */}
           <div className="absolute bottom-4 left-4 z-30 pointer-events-none">
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-cyan-500 animate-pulse" />
               <span className="text-slate-600 font-mono text-[10px] tracking-[0.15em] uppercase">
-                Ultra Engine v3.0
+                Ultra Engine v4.0
               </span>
             </div>
           </div>
